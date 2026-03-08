@@ -119,14 +119,14 @@ function fillSelect(sel, items, labelFn) {
 
 // Decode Sims naming convention for human-readable dropdown labels.
 // Naming: B=body, C=head, H=hand, M=male, F=female, A=adult, C=child,
-// Fat/Fit/Skn=body type, drk/lgt/med=skin tone.
+// Fat/Fit/Skn=body type (Fat -> "Way Big" in UI), drk/lgt/med=skin tone.
 function decodeMeshName(name) {
     const parts = [];
     const lower = name.toLowerCase();
-    if (lower.includes('fafat')) parts.push('F Fat');
+    if (lower.includes('fafat')) parts.push('F Way Big');
     else if (lower.includes('fafit')) parts.push('F Fit');
     else if (lower.includes('faskn')) parts.push('F Skinny');
-    else if (lower.includes('mafat')) parts.push('M Fat');
+    else if (lower.includes('mafat')) parts.push('M Way Big');
     else if (lower.includes('mafit')) parts.push('M Fit');
     else if (lower.includes('maskn')) parts.push('M Skinny');
     else if (lower.includes('ucchd') || lower.includes('kbodynaked')) parts.push('Child');
