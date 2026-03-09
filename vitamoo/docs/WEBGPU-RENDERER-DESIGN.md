@@ -1,6 +1,6 @@
 # WebGPU renderer: upgrade and advanced features
 
-Design for replacing the current WebGL renderer with a WebGPU-only backend and extending it to support Sims-style holodeck rendering: z-buffered sprites, procedural architecture, and UI feedback (highlighting, selection, pie menu).
+Design for replacing the current WebGL renderer with a WebGPU-only backend and extending it to support Sims-style holodeck rendering: z-buffered sprites, procedural terrain and architecture, and UI feedback (highlighting, selection, pie menu).
 
 ---
 
@@ -113,6 +113,7 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 - **Background:** Desaturated version of the scene behind the menu. Options: (a) Copy current framebuffer to a texture, then draw a fullscreen quad that samples it and desaturates (e.g. dot with gray weights) and optionally darkens; (b) Re-render scene with a desaturate-only fragment shader to an offscreen texture, then draw that as background. (a) is simpler if we have a resolve/copy path.
 - **Feather / vignette:** Fullscreen quad with radial gradient (soft falloff) so the center is clear and the edges fade to a shadow color. Drawn after the desaturated background. Alpha blend.
 - **Shadows:** “Drop shadow” behind the pie: draw the pie shape (or a rounded rect) slightly offset and blurred (or with a soft edge) in a dark color, then draw the pie on top. Can be a simple soft quad or a small blur in a shader (e.g. 4-tap or 9-tap blur on a small texture). All of this can live in one “UI overlay” pass with 2–3 draws: desaturated bg, feather, shadow, then menu content.
+- **Head in pie menu:** The character animation system already supports rendering only the head (e.g. head mesh/suit in local or bone-local coordinates, as in the original vitaboy “drawing the people's heads in the center of the pie menu”). The WebGPU renderer reuses the same mesh pipeline: draw the head mesh with the appropriate camera and transform so the Sim’s head appears in the center of the pie. No new shader; just a dedicated draw call with head-only geometry and optional scale/position for the menu.
 
 ### 3.10 Summary table
 
@@ -129,6 +130,7 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 | Pie menu bg | Fullscreen quad | Desaturate current frame or re-render |
 | Pie menu feather | Fullscreen quad | Radial alpha / vignette |
 | Pie menu shadow | Fullscreen / quad | Soft drop shadow behind menu |
+| Pie menu head | Mesh (existing) | Head-only render in center; animation system already supports it |
 
 ---
 
@@ -142,5 +144,60 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 6. **Lighting** (ambient + directional in fragment).
 7. **Highlight / selection / feedback** (uniforms + one small overlay pass if needed).
 8. **Pie menu** (desaturated bg, feather, shadow) when the app adds a pie UI.
+
+---
+
+## 5. Advanced goal: GPU-side skeletal deformation
+
+**Idea:** Upload all undeformed character meshes and skeletons to the GPU once; run skeletal mesh deformation (and ideally animation) on the GPU; render from the resulting mesh state without streaming deformed vertices back from the CPU each frame.
+
+### 5.1 Current divide
+
+Today the CPU owns the pipeline: `updateTransforms(bones)` and `deformMesh(mesh, bones, boneMap)` produce deformed vertices and normals in JS; the renderer uploads those to the GPU every frame and draws. Mesh and skeleton data live in CPU memory; only the final deformed buffers are sent to the GPU each frame.
+
+### 5.2 Target: data on GPU, animate on GPU
+
+- **Upload once (or at load):** For each character, upload to GPU and keep there:
+  - **Undeformed mesh:** positions, normals, UVs, indices; plus **bone bindings** (per-bone: firstVertex, vertexCount, firstBlendedVertex, blendedVertexCount) and **blend bindings** (otherVertexIndex, weight). These are static per mesh.
+  - **Skeleton:** hierarchy (parent indices or structure), rest pose (local position, rotation per bone). Static per character.
+  - **Animation data (optional):** Keyframes or motion curves per bone (translation, rotation over time) so the GPU can derive current pose from a time uniform.
+- **Animate on GPU:** Two possible levels:
+  - **Option A — Deformation only on GPU:** CPU still runs `Practice.tick` and computes bone world poses each frame; upload only the current bone matrices (or position+rotation) to a uniform/storage buffer. A **compute shader** (or vertex shader, if we restructure — see below) performs the same Phase 0 / Phase 1 / Blend logic as `deformMesh`, writing deformed positions and normals to a GPU buffer. The render pass then draws from that buffer. No deformed data leaves the GPU; only a small bone-matrix upload per frame.
+  - **Option B — Full GPU animation:** Time (and maybe skill/sequence ID) is uploaded each frame. A **compute shader** evaluates animation (keyframe interpolation, or sample from textures) to produce bone world matrices, then runs the same deformation logic and writes deformed mesh buffer. No per-frame skeleton or mesh data from CPU; only time (and optionally a few parameters).
+- **Render from GPU output:** The mesh draw uses the buffer filled by the deformation pass (positions, normals; UVs and indices are unchanged). One compute pass per character (or batched), then one draw per character from the deformed buffer. No readback of deformed vertices to CPU.
+
+So yes: we can download (upload) all undeformed meshes and skeletons to the GPU and leave them there; then animate and deform on the GPU and render from that state.
+
+### 5.3 Implementing the current deformation model on GPU
+
+The vitamoo deformation model (see `skeleton.ts`) is:
+
+- **Phase 0:** Each bone transforms its “bound” vertices (position and normal) by its world position and rotation.
+- **Phase 1:** Each bone transforms its “blended” vertices (stored at offset `boundCount` in the vertex array).
+- **Blend:** Each blend binding lerps a blended vertex into a bound vertex: `destVert = lerp(destByBoneA, blendByBoneB, weight)` (and same for normals, normalized).
+
+This is not the usual per-vertex “bone indices + weights” skinning; it’s bone-ranged and then a blend pass. It maps cleanly to a **compute shader**:
+
+- **Input buffers (read-only, resident on GPU):** undeformed vertices/normals, bone bindings (bone index, firstVertex, vertexCount, firstBlendedVertex, blendedVertexCount), blend bindings (otherVertexIndex, weight), and per-frame bone world matrices (position.xyz + rotation quat or 3×3).
+- **Output buffer (write):** deformed positions and normals (same layout as current `drawMesh` input).
+- **Dispatch:** One thread per vertex (or per binding range); implement Phase 0 and Phase 1 by having each thread know which bone(s) affect it, then a second pass or same pass with careful ordering for the blend step. (Blend reads from and writes to the same buffer, so either two buffers ping-pong or structure the blend so writes don’t conflict — e.g. blend bindings write into bound vertex indices, which are not written in the blend phase.)
+
+Alternatively, we could **pre-convert** the mesh to a conventional format (e.g. per-vertex up to N bone indices and weights) and use **vertex-shader skinning**; that would require a one-time conversion and might approximate the current blend behavior rather than match it exactly.
+
+### 5.4 What stays on CPU vs GPU
+
+| Data | Today | Advanced (GPU deformation) |
+|------|--------|-----------------------------|
+| Undeformed mesh (verts, norms, UVs, indices, bone/blend bindings) | CPU | GPU (upload once) |
+| Skeleton (rest pose, hierarchy) | CPU | GPU (upload once) |
+| Animation (motions, keyframes) | CPU | Optional: GPU (for Option B) |
+| Current bone poses (world position, rotation) | CPU every frame | Option A: CPU computes, upload matrices. Option B: GPU computes from time. |
+| Deformed vertices/normals | CPU every frame → upload | GPU only (compute output → render input) |
+
+### 5.5 Benefits
+
+- **No per-frame vertex upload:** Deformed mesh stays on GPU; only small uniform/buffer updates (bone matrices or time).
+- **Scalability:** Many characters mean many small compute dispatches and draws, not huge CPU→GPU vertex streams.
+- **Pipeline clarity:** Load → upload assets once; each frame: update pose (or time), run deformation, draw. Same mental model as “holodeck”: static and skinned data on GPU, animate on that side of the divide.
 
 This document is the single design reference for the WebGPU upgrade and advanced Sims-style renderer features; implementation can be done incrementally with AI-assisted development and typically shortens the calendar time (e.g. full refactor in a few days with AI assist).
