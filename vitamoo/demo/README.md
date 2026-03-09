@@ -4,13 +4,11 @@ Browser-based character viewer for Sims 1 meshes, skeletons, and animations. Rei
 
 ## Files
 
-| File | Role |
-|------|------|
-| `index.html` | Single-page layout: sidebar (Scene / Actor / Character / Animation) + canvas + controls + help dialog |
-| `viewer.js` | All demo logic (~2.5k lines): content loading, UI, rendering loop, camera, voice, top physics |
-| `viewer.css` | Layout and styling for the viewer |
-| `content.json` | Content index: skeletons, suits, meshes, animations, CFP files, character presets, scenes |
-| `data/` | Sims asset files (`.cmx`, `.skn`, `.cfp`, `.bmp`) referenced by `content.json` |
+- **`index.html`** — Single-page layout: sidebar (Scene / Actor / Character / Animation) + canvas + controls + help dialog.
+- **`viewer.js`** — All demo logic (~2.5k lines): content loading, UI, rendering loop, camera, voice, top physics.
+- **`viewer.css`** — Layout and styling for the viewer.
+- **`content.json`** — Content index: skeletons, suits, meshes, animations, CFP files, character presets, scenes.
+- **`data/`** — Sims asset files (`.cmx`, `.skn`, `.cfp`, `.bmp`) referenced by `content.json`.
 
 The demo imports the compiled VitaMoo library from the same directory (e.g. `parser.js`, `skeleton.js`, `renderer.js`, `texture.js`, `animation.js`) after `npm run build`.
 
@@ -36,8 +34,8 @@ The file is a single module with shared state and no internal imports. Logical s
 
 - **`content`** — Parsed assets: `skeletons`, `suits`, `skills`, `meshes`, `textures` (name → data or filename)
 - **`contentIndex`** — Loaded `content.json` (defaults, characters, scenes, file lists)
-- **`bodies`** — Array of body objects (skeleton, meshes, practice, position, top state, personData). One in solo mode; multiple in scene mode
-- **`activeScene`** — Current scene name or null (solo)
+- **`bodies`** — Array of body objects (skeleton, meshes, practice, position, top state, personData).
+- **`activeScene`** — Current scene name or null
 - **`selectedActorIndex`** — Which body is selected for editing (-1 = “All”)
 
 ### Content loading

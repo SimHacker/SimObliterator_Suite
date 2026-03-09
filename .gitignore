@@ -76,6 +76,13 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
+# Node
+node_modules/
+.pnpm-store/
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+
 # Project specific
 *.bak
 *.backup
@@ -93,5 +100,6 @@ Examples/SaveGames/*
 # Temp files
 *.tmp
 *.temp
-vitamoo/node_modules/
+
+# Vitamoo / workspace build outputs
 vitamoo/dist/
