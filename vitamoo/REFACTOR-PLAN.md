@@ -13,6 +13,8 @@
 
 Definition of Done: items 1–4 are met. Item 5 (parity review + optional migration notes) is the only remaining checklist item.
 
+**Beyond Phase 5:** WebGPU renderer (see DOCUMENTATION.md §6 Plan for mooshow): object-ID rendering, RGB+alpha+z layered sprites from 3D (for object creation), and one reusable pipeline for holodeck runtime (pre-rendered z-buffered background + real-time characters), Sims object creation tools, and save file viewing/editing.
+
 ---
 
 ## Goal
