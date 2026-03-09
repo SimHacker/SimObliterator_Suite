@@ -1,0 +1,146 @@
+# WebGPU renderer: upgrade and advanced features
+
+Design for replacing the current WebGL renderer with a WebGPU-only backend and extending it to support Sims-style holodeck rendering: z-buffered sprites, procedural architecture, and UI feedback (highlighting, selection, pie menu).
+
+---
+
+## 1. WebGL to WebGPU upgrade
+
+### 1.1 Current surface (vitamoo)
+
+All GPU use is in **vitamoo**:
+
+| File | Role |
+|------|------|
+| `vitamoo/renderer.ts` | Single `Renderer` class, WebGL 1 context, one vertex + one fragment shader (GLSL). Methods: `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh`, `drawDiamond`, `loadTexture`. Exposes `context` (WebGLRenderingContext) for texture upload. |
+| `vitamoo/texture.ts` | `parseBMP` (pure); `loadTexture(url, gl)` creates and uploads a WebGLTexture. |
+
+**mooshow** uses only: `new Renderer(canvas)`, then `clear`, `setCamera`, `context.viewport(…)`, `fadeScreen`, `drawMesh`, `drawDiamond`, and `loader.setGL(renderer.context)` so the content loader can create textures. No other WebGL calls.
+
+### 1.2 Target WebGPU surface
+
+- **Device/queue:** `navigator.gpu.requestAdapter()` → `adapter.requestDevice()`; use one `GPUDevice` and its default `queue` for the lifetime of the renderer.
+- **Canvas:** `canvas.getContext('webgpu')`, configure with `device`, `format`, and optional `alphaMode`. Resize and get current texture each frame.
+- **Shaders:** WGSL. One or more shader modules; at least:
+  - **Mesh pass:** vertex (position, normal, uv, MVP, light direction) → fragment (diffuse + texture, alpha, optional fade color). Matches current GLSL behavior.
+  - **Fullscreen quad pass:** for `fadeScreen` (motion blur overlay).
+  - **Diamond (plumb bob):** same mesh pipeline with solid color and no texture; or a tiny dedicated pipeline.
+- **Pipelines:** `GPURenderPipeline` for mesh, for fullscreen quad, and for diamond if separate. Shared bind group layout for uniforms (projection, modelView, lightDir, alpha, fadeColor, texture).
+- **Buffers:** `GPUBuffer` for vertex/index data. Uniforms in a small `GPUBuffer` updated each frame (or per draw). No long-lived vertex buffers for dynamic meshes unless we adopt staging buffers and copy.
+- **Textures:** `loadTexture` becomes `loadTexture(device, url)` (or `device` + queue), returns `GPUTexture` (or an opaque handle the renderer accepts in `drawMesh`). Upload via `queue.copyExternalImageToTexture` from `createImageBitmap` or from decoded BMP data.
+- **Public API preserved:** `clear`, `setCamera`, `setViewport` (method on renderer, no raw context), `fadeScreen`, `drawMesh(mesh, verts, norms, texture)`, `drawDiamond(…)`. Callers (mooshow stage, content-loader) receive a device or a texture-upload interface instead of `gl`; they never touch WebGPU objects except through the renderer.
+
+### 1.3 Shader migration (GLSL → WGSL)
+
+- **Vertex:** `aPosition`, `aNormal`, `aTexCoord` → `@location(0)` position, `@location(1)` normal, `@location(2)` texCoord. Output position, uv, normal to fragment. Uniforms: `uProjection`, `uModelView` (or single `uModelViewProjection`).
+- **Fragment:** `vTexCoord`, `vNormal` from vertex; `uniform sampler2D uTexture`, `uniform bool uHasTexture`, `uLightDir`, `uAlpha`, `uFadeColor`. Same math: if `uFadeColor` is “use fade” sentinel, output fade color; else diffuse + texture or untextured gray. WGSL uses `textureSample`, `textureSampleLevel`, and `@binding`/`@group` for texture and sampler.
+- **Fullscreen quad:** vertex outputs NDC position and optional uv; fragment samples nothing (solid color) for fadeScreen. Uniform: clear color + alpha.
+- **Entry points:** `@vertex` and `@fragment` per pipeline.
+
+### 1.4 Phases
+
+1. **Parity:** Replace `renderer.ts` and `loadTexture` with WebGPU; keep the same public API and behavior (skinned mesh, motion blur, plumb bob). No new features. mooshow passes device (or renderer’s texture factory) to the loader; viewport set via `renderer.setViewport`.
+2. **Object-ID and layered sprites (optional next):** Add a second pass or alternate pipeline that writes object ID (e.g. R32Uint or packed RGB) for picking and for baking RGB+alpha+z layers for object authoring.
+3. **Advanced features:** Sims-style pipeline, procedural architecture, and UI shader effects (below).
+
+---
+
+## 2. Advanced WebGPU renderer — Sims-style pipeline
+
+### 2.1 Holodeck composition
+
+- **Background:** Pre-rendered or procedurally generated: terrain, floors, walls, roofs, and static props. Rendered first into the same depth buffer (or a separate depth that we merge). Can be:
+  - Pre-rendered RGB+alpha+z sprites (layered images with depth), or
+  - Procedural geometry drawn in the same pass (terrain, tiles, walls, roofs from shaders).
+- **Characters:** Real-time vitamoo skinned meshes (current `drawMesh` path). Drawn after the background with depth test on, so they correctly occlude and are occluded.
+- **Order:** (1) Clear. (2) Draw background (sprites and/or procedural) with depth write. (3) Draw 3D characters with depth test and write. (4) Optional: UI overlay (pie menu, feedback).
+
+One camera, one depth buffer, one render pass (or a small number of passes) so composition stays simple and correct.
+
+### 2.2 Z-buffered sprites
+
+- **Input:** Per-object or per-layer RGBA + depth (e.g. from object-ID / bake pass, or from pre-rendered assets). Sprites are screen-aligned or billboarded quads with texture (RGB+A) and depth.
+- **Composition:** Draw sprites in back-to-front or use depth buffer: draw each sprite with its depth so characters and other geometry correctly interleave. Same pipeline as “background” above when background is image-based.
+- **Object creation:** 3D model (OBJ, glTF, or Sims assets) → render to RGB + alpha + z → export as layered sprite for use in holodeck or in object tools.
+
+### 2.3 Object-ID and picking
+
+- **ID pass:** Optional render pass that writes a stable object ID per pixel (e.g. integer in R or RGB). Read back on click or sample in a small region to resolve which object was picked. Supports both procedural geometry and sprites if we assign IDs consistently.
+- **Layered sprite authoring:** Same ID or a separate “bake” pass used to generate the RGB+alpha+z layers for new objects.
+
+---
+
+## 3. Shader scope — how much in shaders
+
+Goal: push as much Sims-style look and feel into shaders as we can (performance, consistency, single pipeline). Below is a concrete list; implementation order can follow parity first, then background/terrain, then UI.
+
+### 3.1 Terrain
+
+- **Options:** (a) Heightfield from texture or vertex grid, (b) tiled terrain with repeating or blended tiles, (c) fully procedural (noise-based height + optional texture). Shaders: vertex displacing by height, fragment for color (texture sample or procedural). We can start with a simple grid + height texture and add procedural variation later.
+
+### 3.2 Floor tiles
+
+- **Grid:** Vertex buffer or instancing for a grid of quads. UVs for tile index or atlas. Shader: sample floor tile atlas; optional edge lines or pattern (e.g. checker) in fragment. Tiling and repetition fully in shader.
+
+### 3.3 Walls
+
+- **Quads or boxes:** Planar geometry with normals. Shader: diffuse (and optional simple procedural pattern or texture). Wall edges or trim can be a separate pass or same pass with different UVs. Lighting from shared directional/ambient.
+
+### 3.4 Roofs
+
+- **Pitched planes:** Triangles or quads for roof faces. Shader: tiling texture or procedural (e.g. shingle pattern). Same lighting model as walls. Can be instanced for repeated roof segments.
+
+### 3.5 Lighting
+
+- **Current (keep):** Directional light from camera direction + bias; diffuse in fragment.
+- **Extend in shaders:** Ambient term (constant or from uniform). Optional: second light (fill). No need for full PBR initially; keep “Sims-style” simple diffuse + ambient.
+- **Shadows (optional):** Simple shadow map or fake “blob” under characters; can be a later pass. Not required for first advanced pass.
+
+### 3.6 Highlighting (hover)
+
+- **Options:** (a) Outline pass (render object again with scaled geometry and solid color), (b) tint overlay (multiply or add a color in fragment when “highlight” uniform is set), (c) second pass that adds a highlight color where object-ID matches hovered ID. Prefer (b) or (c) to avoid double geometry; can be a uniform on the existing mesh pipeline: `uHighlight (vec3 or vec4)` and blend in fragment.
+
+### 3.7 Selection
+
+- **Object-ID:** Already covered; click resolves ID. Visual: same as highlighting (tint or outline) keyed by “selected” ID. Optional: thicker outline or different color for selection vs hover.
+
+### 3.8 Feedback (click / state)
+
+- **In shader:** Brief flash or pulse: e.g. `uFeedback` (float 0..1) that lerps or multiplies with base color. Driven by JS timer. No new geometry; just a uniform on mesh or fullscreen overlay.
+
+### 3.9 Pie menu
+
+- **Background:** Desaturated version of the scene behind the menu. Options: (a) Copy current framebuffer to a texture, then draw a fullscreen quad that samples it and desaturates (e.g. dot with gray weights) and optionally darkens; (b) Re-render scene with a desaturate-only fragment shader to an offscreen texture, then draw that as background. (a) is simpler if we have a resolve/copy path.
+- **Feather / vignette:** Fullscreen quad with radial gradient (soft falloff) so the center is clear and the edges fade to a shadow color. Drawn after the desaturated background. Alpha blend.
+- **Shadows:** “Drop shadow” behind the pie: draw the pie shape (or a rounded rect) slightly offset and blurred (or with a soft edge) in a dark color, then draw the pie on top. Can be a simple soft quad or a small blur in a shader (e.g. 4-tap or 9-tap blur on a small texture). All of this can live in one “UI overlay” pass with 2–3 draws: desaturated bg, feather, shadow, then menu content.
+
+### 3.10 Summary table
+
+| Feature | Where it lives | Notes |
+|--------|-----------------|-------|
+| Terrain | Vertex + fragment | Height, tile or procedural color |
+| Floor tiles | Fragment (atlas/UV) | Grid geometry, shader does tiling |
+| Walls | Vertex + fragment | Quads, diffuse + optional texture |
+| Roofs | Vertex + fragment | Pitched planes, tiling or texture |
+| Lighting | Fragment | Directional + ambient; extend current |
+| Highlighting | Fragment (uniform) | Tint or blend when hover |
+| Selection | Fragment (uniform) or ID | Same as highlight, different color/state |
+| Feedback | Fragment (uniform) | Flash/pulse driven by JS |
+| Pie menu bg | Fullscreen quad | Desaturate current frame or re-render |
+| Pie menu feather | Fullscreen quad | Radial alpha / vignette |
+| Pie menu shadow | Fullscreen / quad | Soft drop shadow behind menu |
+
+---
+
+## 4. Implementation order (suggested)
+
+1. **WebGL → WebGPU parity** (renderer + texture, same API, no new features).
+2. **setViewport** and loader texture interface (device or factory) so mooshow and vitamoospace work unchanged.
+3. **Object-ID pass** (optional) for picking and future baking.
+4. **Background layer:** z-buffered sprites and/or procedural terrain + floor (minimal: grid + height + one tile texture).
+5. **Walls and roofs** (procedural or tiled in shaders).
+6. **Lighting** (ambient + directional in fragment).
+7. **Highlight / selection / feedback** (uniforms + one small overlay pass if needed).
+8. **Pie menu** (desaturated bg, feather, shadow) when the app adds a pie UI.
+
+This document is the single design reference for the WebGPU upgrade and advanced Sims-style renderer features; implementation can be done incrementally with AI-assisted development and typically shortens the calendar time (e.g. full refactor in a few days with AI assist).
