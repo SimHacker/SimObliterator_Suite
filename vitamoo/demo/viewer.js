@@ -32,7 +32,7 @@ let contentIndex = null;
 
 // Rendering state
 let renderer = null;
-let activeSkeleton = null;  // Bone[] (primary body for solo mode)
+let activeSkeleton = null;  // Bone[] (first body when bodies.length > 0)
 let activeMeshes = [];      // {mesh, boneMap, texture}[] (primary body)
 let cameraTarget = { x: 0, y: 2.5, z: 0 };
 
@@ -63,7 +63,7 @@ function createBody() {
     };
 }
 let bodies = [];              // Body[] — all characters in the current scene
-let activeScene = null;       // current scene name or null (solo mode)
+let activeScene = null;       // current scene name or null
 let selectedActorIndex = -1;  // which actor in bodies[] is selected for editing (-1 = none)
 const cfpCache = new Map();   // animationFileName -> ArrayBuffer (loaded CFP data)
 const _skelCache = {};        // skelFile -> CMX text (preloaded skeleton data)
@@ -993,8 +993,8 @@ let spinGain = null;
 //   "oo" (ooh):  300,  870, 2240  — leaning, rounded
 //   "aa" (aah):  730, 1090, 2440  — max lean, open mouth
 //   "aw" (aww):  570,  840, 2410  — coming back around
-let spinFormants = null; // solo mode voice chain
-let bodyVoices = [];     // per-body voice chains for scene mode
+let spinFormants = null; // spin whoosh voice chain
+let bodyVoices = [];     // per-body voice chains
 
 // Create one complete voice chain: 2 oscillators + noise -> 3 bandpass formants -> gain -> panner -> destination
 function createVoiceChain() {

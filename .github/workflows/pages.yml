@@ -1,9 +1,5 @@
-name: Deploy VitaMoo to GitHub Pages
+name: Deploy VitaMooSpace to GitHub Pages
 
-# Manual trigger only — enable Pages in Settings > Pages > Source: GitHub Actions.
-#   1. Enable Pages: Settings > Pages > Source: GitHub Actions
-#   2. (Optional) Set custom domain in Settings > Pages > Custom domain
-#   3. Trigger this workflow manually, or add a push trigger for automation
 on:
   workflow_dispatch:
 
@@ -25,23 +21,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: pnpm
 
       - name: Install dependencies
-        working-directory: vitamoo
-        run: npm ci
+        run: pnpm install --no-frozen-lockfile
 
-      - name: Build library and demo
-        working-directory: vitamoo
-        run: npm run build
+      - name: Build vitamoo core
+        run: pnpm --filter vitamoo run build
+
+      - name: Build mooshow
+        run: pnpm --filter mooshow run build
+
+      - name: Build vitamoospace
+        env:
+          BASE_PATH: ${{ secrets.BASE_PATH || format('/{0}', github.event.repository.name) }}
+        run: pnpm --filter vitamoospace run build
 
       - uses: actions/configure-pages@v4
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: vitamoo/dist
+          path: vitamoo/vitamoospace/build
 
       - name: Deploy
         id: deployment
