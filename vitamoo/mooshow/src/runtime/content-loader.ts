@@ -1,6 +1,12 @@
-import { parseCMX, parseSKN, parseCFP, loadTexture, Practice, buildSkeleton, updateTransforms } from 'vitamoo';
+/// <reference types="@webgpu/types" />
+import { parseCMX, parseSKN, parseCFP, Practice, buildSkeleton, updateTransforms } from 'vitamoo';
+import type { TextureHandle } from 'vitamoo';
 import type { Body } from './types.js';
 import { createBody } from './types.js';
+
+export interface TextureFactory {
+    createTextureFromUrl(url: string): Promise<TextureHandle>;
+}
 
 export interface ContentStore {
     skeletons: Record<string, any>;
@@ -62,8 +68,8 @@ export class ContentLoader {
     private _cfpIndex = new Map<string, string>();
     private _cfpCache = new Map<string, ArrayBuffer>();
     private _skelCache: Record<string, string> = {};
-    private _textureCache = new Map<string, WebGLTexture>();
-    private _gl: WebGLRenderingContext | null = null;
+    private _textureCache = new Map<string, TextureHandle>();
+    private _textureFactory: TextureFactory | null = null;
 
     constructor(baseUrl: string) {
         this.store = createContentStore();
@@ -74,8 +80,8 @@ export class ContentLoader {
         return this._index;
     }
 
-    setGL(gl: WebGLRenderingContext): void {
-        this._gl = gl;
+    setTextureFactory(factory: TextureFactory): void {
+        this._textureFactory = factory;
     }
 
     async loadIndex(url: string): Promise<ContentIndex> {
@@ -196,17 +202,17 @@ export class ContentLoader {
         onProgress?.('Ready');
     }
 
-    async getTexture(baseName: string): Promise<WebGLTexture | null> {
-        if (!baseName || !this._gl) return null;
+    async getTexture(baseName: string): Promise<TextureHandle | null> {
+        if (!baseName || !this._textureFactory) return null;
         if (this._textureCache.has(baseName)) return this._textureCache.get(baseName)!;
 
         const fileName = this.store.textures[baseName];
         if (!fileName) return null;
 
         try {
-            const tex = await loadTexture(this.baseUrl + fileName, this._gl);
-            this._textureCache.set(baseName, tex as WebGLTexture);
-            return tex as WebGLTexture;
+            const tex = await this._textureFactory.createTextureFromUrl(this.baseUrl + fileName);
+            this._textureCache.set(baseName, tex);
+            return tex;
         } catch {
             return null;
         }

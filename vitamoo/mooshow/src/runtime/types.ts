@@ -1,3 +1,6 @@
+/// <reference types="@webgpu/types" />
+import type { TextureHandle } from 'vitamoo';
+
 export interface Vec3 {
     x: number;
     y: number;
@@ -20,7 +23,7 @@ export interface TopPhysicsState {
 export interface BodyMeshEntry {
     mesh: any;
     boneMap: Map<string, any>;
-    texture: WebGLTexture | null;
+    texture: TextureHandle | null;
 }
 
 export interface Body {

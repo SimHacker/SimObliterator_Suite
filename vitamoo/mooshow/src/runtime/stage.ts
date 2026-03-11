@@ -1,4 +1,7 @@
+/// <reference types="@webgpu/types" />
 import { Renderer, updateTransforms, deformMesh } from 'vitamoo';
+
+type ResolvedRenderer = Awaited<ReturnType<typeof Renderer.create>> | null;
 import type { MooShowHooks } from '../hooks/types.js';
 import { defaultHooks } from '../hooks/defaults.js';
 import { ContentLoader } from './content-loader.js';
@@ -22,7 +25,7 @@ export class MooShowStage {
     readonly spin: SpinController;
     readonly sound: SoundEngine;
 
-    private _renderer: any = null;
+    private _renderer: ResolvedRenderer | Promise<ResolvedRenderer> | null = null;
     private _running = false;
     private _rafId = 0;
     private _animTime = 0;
@@ -50,15 +53,28 @@ export class MooShowStage {
     private _initRenderer(): void {
         this.canvas.width = this.canvas.clientWidth;
         this.canvas.height = this.canvas.clientHeight;
-        try {
-            this._renderer = new Renderer(this.canvas);
-            this._renderer.context.viewport(0, 0, this.canvas.width, this.canvas.height);
-        } catch (e) {
-            console.error('WebGL init failed:', e);
+        this._renderer = Renderer.create(this.canvas).catch((e) => {
+            console.error('WebGPU init failed:', e);
+            return null;
+        }).then((r) => {
+            if (r) {
+                this.loader.setTextureFactory(r.getTextureFactory());
+                r.setViewport(0, 0, this.canvas.width, this.canvas.height);
+            }
+            return r;
+        });
+    }
+
+    private async _getRenderer(): Promise<ResolvedRenderer | null> {
+        if (this._renderer === null) return null;
+        if (this._renderer instanceof Promise) {
+            this._renderer = await this._renderer;
+            if (this._renderer) {
+                this.loader.setTextureFactory(this._renderer.getTextureFactory());
+                this._renderer.setViewport(0, 0, this.canvas.width, this.canvas.height);
+            }
         }
-        if (this._renderer) {
-            this.loader.setGL(this._renderer.context);
-        }
+        return this._renderer;
     }
 
     get contentIndex(): ContentIndex | null { return this.loader.index; }
@@ -286,17 +302,18 @@ export class MooShowStage {
         this._rafId = requestAnimationFrame(this._loop);
     };
 
-    private _renderFrame(): void {
-        if (!this._renderer) return;
+    private async _renderFrame(): Promise<void> {
+        const renderer = await this._getRenderer();
+        if (!renderer) return;
 
         const spinSpeed = Math.abs(this.spin.rotationVelocity);
         const anyActive = this._bodies.some(b => b.top.active);
 
         if (anyActive && spinSpeed > 1.0) {
             const trailLength = Math.max(0.08, 0.4 - spinSpeed * 0.02);
-            this._renderer.fadeScreen(0.1, 0.1, 0.15, trailLength);
+            renderer.fadeScreen(0.1, 0.1, 0.15, trailLength);
         } else {
-            this._renderer.clear();
+            renderer.clear();
         }
 
         const zoom = this.spin.zoom / 10;
@@ -308,7 +325,7 @@ export class MooShowStage {
         const eyeY = this._cameraTarget.y + Math.sin(rotXRad) * zoom;
         const eyeZ = Math.cos(rotYRad) * cosX * zoom;
 
-        this._renderer.setCamera(50, this.canvas.width / this.canvas.height, 0.01, 100,
+        renderer.setCamera(50, this.canvas.width / this.canvas.height, 0.01, 100,
             eyeX, eyeY, eyeZ,
             this._cameraTarget.x, this._cameraTarget.y, this._cameraTarget.z);
 
@@ -352,7 +369,7 @@ export class MooShowStage {
                         }
                     }
 
-                    this._renderer.drawMesh(mesh, verts, norms, texture || null);
+                    renderer.drawMesh(mesh, verts, norms, texture || null);
                 } catch { /* skip bad mesh */ }
             }
         }
@@ -380,7 +397,7 @@ export class MooShowStage {
                 }
                 const rx = hx * cosD - hz * sinD;
                 const rz = hx * sinD + hz * cosD;
-                this._renderer.drawDiamond(rx + body.x, hy + 1.5 + bob, rz + body.z, 0.18, plumbRot, 0.2, 1.0, 0.2, 0.9);
+                renderer.drawDiamond(rx + body.x, hy + 1.5 + bob, rz + body.z, 0.18, plumbRot, 0.2, 1.0, 0.2, 0.9);
                 this.hooks.onPlumbBobChange?.(bi, true);
             };
 
@@ -388,6 +405,8 @@ export class MooShowStage {
                 drawPlumbBob(bi, this._bodies[bi]);
             }
         }
+
+        renderer.endFrame();
     }
 
     private _computeCameraTarget(skeleton: any[] | null): void {
@@ -461,7 +480,9 @@ export class MooShowStage {
         window.addEventListener('resize', () => {
             c.width = c.clientWidth;
             c.height = c.clientHeight;
-            if (this._renderer) this._renderer.context.viewport(0, 0, c.width, c.height);
+            if (this._renderer && !(this._renderer instanceof Promise)) {
+                this._renderer.setViewport(0, 0, c.width, c.height);
+            }
             this._renderFrame();
         });
 

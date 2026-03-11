@@ -1,5 +1,6 @@
 // VitaMoo texture loader — reads BMP files (Sims native format),
 // plus PNG and JPG when the file extension says so.
+/// <reference types="@webgpu/types" />
 //
 // BMP is the canonical format for Sims 1 skin textures. They're 8-bit
 // indexed color with a 256-entry palette. We read them directly because
@@ -10,6 +11,11 @@
 // decoder, which handles: .png, .jpg, .jpeg, .gif, .webp, .avif,
 // .svg, .ico — whatever the browser supports. This covers modern
 // content from Simopolis tools, AI image generation, or Photoshop.
+//
+// WebGPU: loadTexture(device, queue, url) returns a GPUTexture handle
+// that the renderer accepts in drawMesh.
+
+export type TextureHandle = GPUTexture;
 
 // Parse a BMP file from an ArrayBuffer. Returns an ImageData-compatible
 // object with RGBA pixels ready for WebGL texturing.
@@ -164,46 +170,41 @@ function decodeRLE8(
 }
 
 // Load a texture from a file. Detects format by extension.
-// BMP: parsed directly (handles indexed 8-bit + RLE).
-// PNG/JPG: decoded by the browser's native image loader.
+// BMP: parsed directly (handles indexed 8-bit + RLE), then ImageBitmap → copyExternalImageToTexture.
+// PNG/JPG: browser decode → createImageBitmap → copyExternalImageToTexture.
 export async function loadTexture(
+    device: GPUDevice,
+    queue: GPUQueue,
     url: string,
-    gl: WebGLRenderingContext,
-): Promise<WebGLTexture> {
+): Promise<TextureHandle> {
     const ext = url.split('.').pop()?.toLowerCase() ?? '';
+    let bitmap: ImageBitmap;
 
     if (ext === 'bmp') {
-        // BMP: fetch as binary, parse ourselves
         const response = await fetch(url);
         const buffer = await response.arrayBuffer();
         const { width, height, data } = parseBMP(buffer);
-
-        const tex = gl.createTexture()!;
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0,
-                      gl.RGBA, gl.UNSIGNED_BYTE, data);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        return tex;
+        const imageData = new ImageData(new Uint8ClampedArray(data), width, height);
+        bitmap = await createImageBitmap(imageData);
     } else {
-        // PNG, JPG, or anything else: let the browser decode it
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => {
-                const tex = gl.createTexture()!;
-                gl.bindTexture(gl.TEXTURE_2D, tex);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                resolve(tex);
-            };
-            img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
-            img.src = url;
-        });
+        const response = await fetch(url, { mode: 'cors' });
+        if (!response.ok) throw new Error(`Failed to load image: ${url}`);
+        const blob = await response.blob();
+        bitmap = await createImageBitmap(blob);
     }
+
+    const w = bitmap.width;
+    const h = bitmap.height;
+    const tex = device.createTexture({
+        size: [w, h, 1],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    queue.copyExternalImageToTexture(
+        { source: bitmap },
+        { texture: tex },
+        [w, h, 1],
+    );
+    bitmap.close();
+    return tex;
 }

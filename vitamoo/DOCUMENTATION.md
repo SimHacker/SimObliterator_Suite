@@ -8,23 +8,25 @@ This document describes all layers, components, data flow, and how to reuse or e
 
 ```mermaid
 flowchart TB
-  subgraph app["vitamoospace (SvelteKit app)"]
-    A[Routes, VitaMooSpace.svelte, menus, app state]
+  subgraph app["vitamoospace<br>(SvelteKit app)"]
+    A["<br>Routes, VitaMooSpace.svelte,<br>menus, app state"]
   end
-  subgraph runtime["mooshow (graphics/runtime)"]
-    B[MooShowStage, ContentLoader, SpinController]
-    C[picking, audio]
-    D[Hooks: onPick, onSceneChange, onKeyAction, onPlumbBobChange…]
+  subgraph runtime["mooshow<br>(graphics/runtime)"]
+    B["<br>MooShowStage, ContentLoader,<br>SpinController"]
+    C["<br>picking, audio"]
+    D["<br>Hooks: onPick, onSceneChange,<br>onKeyAction, onPlumbBobChange…"]
   end
-  subgraph core["vitamoo (core)"]
-    E[Parsers: CMX, SKN, CFP…]
-    F[skeleton, mesh deformation, Practice]
-    G[Renderer WebGL, loadTexture]
-    H[No DOM; Node or browser]
+  subgraph core["vitamoo<br>(core)"]
+    E["<br>Parsers: CMX, SKN, CFP…"]
+    F["<br>skeleton, mesh deformation,<br>Practice"]
+    G["<br>Renderer WebGL,<br>loadTexture"]
+    H["<br>No DOM;<br>Node or browser"]
   end
   app --> runtime
   runtime --> core
 ```
+
+Node labels use a leading `<br>` for top spacing; Mermaid does not support vertical padding on flowchart nodes.
 
 - **vitamoo**: Pure animation/data core. No concept of “scene” or “UI”; only skeletons, meshes, skills, and animation ticks.
 - **mooshow**: One place that knows about “bodies” (character instances), camera, input, and rendering. Exposes a single stage API and hooks so the app layer can stay UI-framework-agnostic.
@@ -241,11 +243,33 @@ ContentLoader is used internally by the stage; its types are exported so the app
 - Add options to `StageConfig` (e.g. default zoom, key bindings) and use them in `_bindCanvasEvents` or the loop.
 - Keep a single bodies array and avoid a second “mode” or parallel state so the design stays simple.
 
+### Design goal: Snap! integration
+
+**Cool idea:** Integrate mooshow into [Snap!](https://snap.berkeley.edu/) (browser-based visual programming). The stage API is imperative and UI-framework-agnostic: create a canvas, call `loadContentIndex`, `setScene`, `setCharacterSolo`, `selectActor`, `setAnimation`, and wire hooks. Snap! could expose blocks like "load scene", "play animation", "pick actor at mouse" and drive the same stage from its block runtime. Because mooshow owns only the canvas and hooks (no Svelte or app shell), the integration surface is small: a Snap! extension that instantiates the stage, mounts it in a stage div, and maps blocks to stage methods and hook callbacks. A natural design goal for the stack is to keep that surface narrow so a Snap! (or similar) integration stays tractable.
+
+### Plan for mooshow: hybrid rendering (Sims-style)
+
+**Goal:** Support a hybrid z-buffer, sprite, and procedural-architecture pipeline like The Sims. Render terrain, grass, floors, walls, roofs, and other architecture procedurally or from tiles; render Sims-style objects with z-buffered sprites; and run vitamoo characters (skinned meshes, animation) inside the same scene so characters live in the world. One unified stage: environment + objects + characters, with correct depth ordering and a single camera.
+
+**WebGPU:** Once we add depth passes, multiple draw types (tiles, sprites, skinned meshes), and possibly compute (e.g. grass, culling), WebGPU may be the more elegant base than WebGL: modern pipeline, explicit resource binding, compute shaders, and better batching. Keeping the renderer behind an abstraction (so the stage and vitamoo don’t assume WebGL) makes a future WebGPU backend tractable and avoids locking the hybrid plan into WebGL-only.
+
+**Converting to WebGPU only (no WebGL compat):** Scope is narrow. All GPU code lives in **vitamoo**: `renderer.ts` (~410 lines, one WebGL 1 context, two GLSL shaders, drawMesh / fadeScreen / drawDiamond) and `loadTexture` in `texture.ts` (~30 lines of WebGL texture upload). **mooshow** only uses the Renderer API and passes `renderer.context` into the loader for texture creation; no direct WebGL elsewhere. Work required: (1) Replace `renderer.ts` with a WebGPU implementation: device/queue, WGSL shaders, pipeline and bind groups, same public surface (clear, setCamera, setViewport, drawMesh, drawDiamond, fadeScreen). (2) Replace `loadTexture` to take `GPUDevice` and return `GPUTexture` (or an opaque handle the renderer understands). (3) In mooshow: pass device (or a texture-upload interface) into the loader instead of `gl`; use a viewport method on the renderer if the API no longer exposes a raw context. No dual code paths if we drop WebGL. Estimate: **on the order of 1–2 weeks** for someone comfortable with WebGPU (shader translation GLSL→WGSL, pipeline layout, render pass encoding), plus a few days to wire types and test; **faster with AI-assisted development** (e.g. the full vitamoo refactor was done in a few days with AI assist). See `docs/WEBGPU-RENDERER-DESIGN.md` (in vitamoo) for the upgrade and advanced-feature design.
+
+**Object ID rendering and layered sprites:** The WebGPU renderer can support an object-ID pass (each object drawn with a stable ID color or in a separate buffer) for picking and for authoring. From that, we can produce **RGB + alpha + z layered sprites**: render a 3D object (from whatever format we can read — OBJ, glTF, or Sims-era assets) into color, alpha, and depth layers, then use those layers as pre-rendered z-buffered sprites in the holodeck. That gives a single pipeline for both real-time polygon characters and for object creation: import 3D → render to layers → use as Sims-style object art.
+
+**Reusable renderer vision:** The same WebGPU renderer is intended for:
+
+- **Holodeck-style runtime:** Pre-rendered z-buffered background (rooms, terrain, props as layered sprites) plus real-time polygon characters (vitamoo skinned meshes). One camera, one depth buffer, correct ordering.
+- **Sims object creation tools:** Load or import 3D geometry, render to RGB/alpha/z layers, export or pack as object art for use in-game or in save files.
+- **Save file viewing and editing:** Same rendering pipeline to display and edit saved lots/households/objects with consistent look and picking.
+
+So the renderer is not only for the current character viewer: it is shared infrastructure for holodeck runtime, object authoring, and save-file tooling.
+
 ---
 
 ## 7. Build and run
 
-From the **repository root** (where `pnpm-workspace.yaml` is):
+From the **repository root** (where `pnpm-workspace.yaml` is, i.e. the SimObliterator_Suite root):
 
 ```bash
 pnpm install
@@ -262,3 +286,13 @@ Order matters: vitamoospace depends on mooshow, mooshow on vitamoo. For developm
 - **vitamoospace:** `pnpm --filter vitamoospace run build` → `vitamoospace/build/` (static) or run `vite dev` for dev server.
 
 Demo assets: ensure `vitamoospace/static/data/` contains `content.json` and the CMX/SKN/BMP/CFP files referenced there (e.g. copy from `vitamoo/dist/` or your own content pack).
+
+### If pnpm doesn't handle dependencies
+
+- **Hoisting:** Some environments or tools fail with pnpm's strict `node_modules` layout. At the **repository root** (same directory as `pnpm-workspace.yaml`), add a `.npmrc` with `public-hoist-pattern[]=*` or `shamefully-hoist=true`, then run `pnpm install` again so dependencies are hoisted and easier to resolve.
+- **Build in dependency order with npm:** Skip pnpm and use npm from each package directory. From the repo root:
+  1. `cd vitamoo && npm install && npm run build`
+  2. `cd mooshow` — mooshow declares `vitamoo` with `workspace:*`. For npm you need a local link: either `npm link ../vitamoo` (after `npm run build` in vitamoo) or temporarily set `"vitamoo": "file:../vitamoo"` in `mooshow/package.json`, then `npm install && npm run build`
+  3. `cd vitamoospace` — same idea: use `npm link ../mooshow` or `"mooshow": "file:../mooshow"`, then `npm install && npm run build && npm run preview`
+  That way installs and builds don't rely on pnpm's workspace resolution.
+- **Yarn (if the repo adds workspace support):** If the root gets a `package.json` with `"workspaces": ["vitamoo", "vitamoo/mooshow", "vitamoo/vitamoospace"]`, `yarn` at root can install and link; `yarn workspace vitamoo build`, etc. Right now the repo is pnpm-oriented, so npm-per-package or pnpm with hoisting are the main fallbacks.

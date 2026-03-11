@@ -10,6 +10,9 @@ importers:
 
   vitamoo:
     devDependencies:
+      '@webgpu/types':
+        specifier: ^0.1.38
+        version: 0.1.69
       live-server:
         specifier: ^1.2.2
         version: 1.2.2
@@ -23,6 +26,9 @@ importers:
         specifier: workspace:*
         version: link:..
     devDependencies:
+      '@webgpu/types':
+        specifier: ^0.1.38
+        version: 0.1.69
       typescript:
         specifier: ^5.7
         version: 5.9.3
@@ -459,6 +465,9 @@ packages:
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
+
+  '@webgpu/types@0.1.69':
+    resolution: {integrity: sha512-RPmm6kgRbI8e98zSD3RVACvnuktIja5+yLgDAkTmxLr90BEwdTXRQWNLF3ETTTyH/8mKhznZuN5AveXYFEsMGQ==}
 
   accepts@1.3.8:
     resolution: {integrity: sha512-PYAthTa2m2VKxuvSD3DPC/Gy+U+sOA1LAuT8mkmRuvw+NACSaeXEQ+NHcVF7rONl6qcaxV3Uuemwawk+7+SJLw==}
@@ -1624,6 +1633,8 @@ snapshots:
   '@types/resolve@1.20.2': {}
 
   '@types/trusted-types@2.0.7': {}
+
+  '@webgpu/types@0.1.69': {}
 
   accepts@1.3.8:
     dependencies:

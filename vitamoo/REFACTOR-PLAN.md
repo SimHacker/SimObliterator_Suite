@@ -11,7 +11,9 @@
 | **4** GitHub Pages | Done | `.github/workflows/pages.yml` builds vitamoo → mooshow → vitamoospace and deploys `vitamoospace/build`. |
 | **5** Cleanup and parity | Open | Legacy `demo/` still present and runnable. Parity doc and monorepo migration notes not yet written. |
 
-Definition of Done: 1–4 and 6 are met. Item 5 (parity review + optional migration notes) is the only remaining checklist item.
+Definition of Done: items 1–4 are met. Item 5 (parity review + optional migration notes) is the only remaining checklist item.
+
+**Beyond Phase 5:** WebGPU renderer (see DOCUMENTATION.md §6 Plan for mooshow): object-ID rendering, RGB+alpha+z layered sprites from 3D (for object creation), and one reusable pipeline for holodeck runtime (pre-rendered z-buffered background + real-time characters), Sims object creation tools, and save file viewing/editing.
 
 ---
 

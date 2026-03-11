@@ -1,5 +1,5 @@
 // VitaMoo — main entry point.
-// Loads Sims 1 character data and renders via WebGL.
+// Loads Sims 1 character data and renders via WebGPU.
 //
 // Supports both text formats (CMX, SKN — the development tools)
 // and binary formats (BCF, BMF, CFP — the game runtime).
@@ -18,11 +18,11 @@ export {
 
 export { buildSkeleton, findRoot, findBone, updateTransforms, deformMesh } from './skeleton.js';
 export { Renderer } from './renderer.js';
-
 export {
     DataReader, TextReader, BinaryReader, BinaryWriter,
     buildDeltaTable, decompressFloats, compressFloats,
 } from './reader.js';
 
 export { parseBMP, loadTexture } from './texture.js';
+export type { TextureHandle } from './texture.js';
 export { Practice, RepeatMode } from './animation.js';
