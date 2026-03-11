@@ -13,6 +13,7 @@
     "vitamoo": "workspace:*"
   },
   "devDependencies": {
+    "@webgpu/types": "^0.1.38",
     "typescript": "^5.7"
   }
 }
