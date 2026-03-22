@@ -17,7 +17,15 @@ export {
 } from './parser.js';
 
 export { buildSkeleton, findRoot, findBone, updateTransforms, deformMesh } from './skeleton.js';
-export { Renderer, ObjectIdType, SubObjectId } from './renderer.js';
+export {
+    Renderer,
+    ObjectIdType,
+    SubObjectId,
+    MeshFragmentDebugMode,
+    MESH_FRAGMENT_DEBUG_MODE_MAX,
+    meshFragmentDebugModeLabel,
+} from './renderer.js';
+export type { MeshFragmentDebugModeId } from './renderer.js';
 export {
     DataReader, TextReader, BinaryReader, BinaryWriter,
     buildDeltaTable, decompressFloats, compressFloats,

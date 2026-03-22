@@ -265,6 +265,21 @@ export class ContentLoader {
         });
     }
 
+    async loadCharacterBodyReplacing(char: CharacterDef, previous: Body): Promise<Body | null> {
+        const next = await this._buildBodyFromCharacter(char, {
+            actorName: previous.actorName,
+            x: previous.x,
+            z: previous.z,
+            direction: previous.direction,
+            animation: char.animation,
+        });
+        if (!next) return null;
+        next.spinOffset = previous.spinOffset;
+        next.spinVelocity = previous.spinVelocity;
+        Object.assign(next.top, previous.top);
+        return next;
+    }
+
     private async _buildBodyFromCharacter(
         char: CharacterDef,
         overrides: { actorName?: string; x?: number; z?: number; direction?: number; animation?: string } = {}

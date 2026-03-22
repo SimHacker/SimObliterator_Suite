@@ -188,12 +188,12 @@ export async function loadTexture(
             const buffer = await response.arrayBuffer();
             const { width, height, data } = parseBMP(buffer);
             const imageData = new ImageData(new Uint8ClampedArray(data), width, height);
-            bitmap = await createImageBitmap(imageData);
+            bitmap = await createImageBitmap(imageData, { premultiplyAlpha: 'none' });
         } else {
             const response = await fetch(url, { mode: 'cors' });
             if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}: ${url}`);
             const blob = await response.blob();
-            bitmap = await createImageBitmap(blob);
+            bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none' });
         }
     } catch (e) {
         console.warn('[texture] loadTexture failed:', url, e);
@@ -210,7 +210,7 @@ export async function loadTexture(
     });
     queue.copyExternalImageToTexture(
         { source: bitmap },
-        { texture: tex },
+        { texture: tex, premultipliedAlpha: false },
         [w, h, 1],
     );
     bitmap.close();

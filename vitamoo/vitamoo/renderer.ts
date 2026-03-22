@@ -1,12 +1,55 @@
 // VitaMoo WebGPU renderer — draws deformed meshes with textures.
 /// <reference types="@webgpu/types" />
 
-import { Vec3, MeshData } from './types.js';
+import { Vec2, Vec3, MeshData } from './types.js';
 import { loadTexture } from './texture.js';
 import { createDiamondMesh } from './procedural/diamond.js';
 import { transformMesh } from './display-list.js';
 
 export type TextureHandle = import('./texture.js').TextureHandle;
+
+/**
+ * Highest `PickDebugUniforms.debugMode` value (binding 3) in WGSL (`fragmentMain` + `fragmentMainColorOnly`).
+ * When adding a mode: increment this, add matching `if (pd.debugMode == N)` branches in both fragments
+ * (same order, early return), and extend {@link meshFragmentDebugModeLabel}.
+ */
+export const MESH_FRAGMENT_DEBUG_MODE_MAX = 6;
+
+/** Numeric ids for WGSL `PickDebugUniforms.debugMode` (mesh pass, binding 3). */
+export const MeshFragmentDebugMode = {
+    NORMAL: 0,
+    UV_AS_RG: 1,
+    UV_CHECKER_8: 2,
+    SOLID_RED: 3,
+    RAW_TEXTURE: 4,
+    NORMALS_RGB: 5,
+    ALBEDO_WHITE_LIGHT: 6,
+} as const;
+
+export type MeshFragmentDebugModeId = (typeof MeshFragmentDebugMode)[keyof typeof MeshFragmentDebugMode];
+
+export function meshFragmentDebugModeLabel(id: number): string {
+    switch (id) {
+        case MeshFragmentDebugMode.NORMAL:
+            return 'normal (lit + textured)';
+        case MeshFragmentDebugMode.UV_AS_RG:
+            return 'UV as red/green';
+        case MeshFragmentDebugMode.UV_CHECKER_8:
+            return 'UV checker 8×8';
+        case MeshFragmentDebugMode.SOLID_RED:
+            return 'solid red';
+        case MeshFragmentDebugMode.RAW_TEXTURE:
+            return 'raw texture (no lighting)';
+        case MeshFragmentDebugMode.NORMALS_RGB:
+            return 'vertex normals as RGB';
+        case MeshFragmentDebugMode.ALBEDO_WHITE_LIGHT:
+            return 'white albedo × lighting only';
+        default:
+            return id > MESH_FRAGMENT_DEBUG_MODE_MAX
+                ? `out of range (${id}; max ${MESH_FRAGMENT_DEBUG_MODE_MAX})`
+                : `reserved (${id})`;
+    }
+}
 
 const MESH_VERTEX_WGSL = `
 struct Uniforms {
@@ -14,19 +57,28 @@ struct Uniforms {
     modelView: mat4x4f,
     lightDir: vec3f,
     alpha: f32,
-    fadeColor: vec3f,
+    fadeColor: vec4f,
     hasTexture: u32,
+    solidColorMode: u32,
     ambient: f32,
     diffuseFactor: f32,
     highlight: vec4f,
+}
+struct PickDebugUniforms {
+    debugMode: u32,
     idType: u32,
     objectId: u32,
     subObjectId: u32,
-    debugMode: u32,
 }
+// fadeColor: xyz = tint or sentinel; .w unused (keeps hasTexture/solid u32 at stable offsets vs vec3 padding).
+// Pick/debug u32s live only in pd (binding 3) so they cannot alias floats in u (binding 0) on any backend.
+// General-purpose mesh diagnostics: pd.debugMode 0 uses the normal path below; 1..MESH_FRAGMENT_DEBUG_MODE_MAX
+// are early-return views (UV, lighting isolation, etc.). Keep fragmentMain + fragmentMainColorOnly in sync;
+// extend in TS: MESH_FRAGMENT_DEBUG_MODE_MAX + meshFragmentDebugModeLabel + MeshFragmentDebugMode.
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var<uniform> pd: PickDebugUniforms;
 
 struct VertexInput {
     @location(0) position: vec3f,
@@ -46,19 +98,24 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
     out.normal = input.normal;
     return out;
 }
-struct FragmentOutput {
-    @location(0) objectId: vec4u,
-    @location(1) color: vec4f,
+struct MeshPickColorOutput {
+    @location(0) idType: u32,
+    @location(1) objectId: u32,
+    @location(2) subObjectId: u32,
+    @location(3) color: vec4f,
 }
 @fragment
-fn fragmentMain(input: VertexOutput) -> FragmentOutput {
-    var result: FragmentOutput;
-    result.objectId = vec4u(u.idType, u.objectId, u.subObjectId, 0u);
-    if (u.debugMode == 1u) {
+fn fragmentMain(input: VertexOutput) -> MeshPickColorOutput {
+    var result: MeshPickColorOutput;
+    result.idType = pd.idType;
+    result.objectId = pd.objectId;
+    result.subObjectId = pd.subObjectId;
+    // --- debugMode branches (see MeshFragmentDebugMode in renderer.ts) ---
+    if (pd.debugMode == 1u) {
         result.color = vec4f(input.texCoord.x, input.texCoord.y, 0.0, 1.0);
         return result;
     }
-    if (u.debugMode == 2u) {
+    if (pd.debugMode == 2u) {
         let uv = input.texCoord * 8.0;
         let cx = i32(floor(uv.x));
         let cy = i32(floor(uv.y));
@@ -66,12 +123,39 @@ fn fragmentMain(input: VertexOutput) -> FragmentOutput {
         result.color = vec4f(c, c, c, 1.0);
         return result;
     }
-    if (u.debugMode == 3u) {
+    if (pd.debugMode == 3u) {
         result.color = vec4f(1.0, 0.0, 0.0, 1.0);
         return result;
     }
-    if (u.fadeColor.r >= 0.0) {
-        result.color = vec4f(u.fadeColor, u.alpha);
+    if (pd.debugMode == 4u) {
+        if (u.hasTexture != 0u) {
+            let texColor = textureSampleLevel(tex, samp, input.texCoord, 0.0);
+            result.color = vec4f(texColor.rgb, texColor.a * u.alpha);
+        } else {
+            result.color = vec4f(1.0, 0.0, 1.0, 1.0);
+        }
+        return result;
+    }
+    if (pd.debugMode == 5u) {
+        let nn = normalize(input.normal) * 0.5 + 0.5;
+        result.color = vec4f(nn, 1.0);
+        return result;
+    }
+    if (pd.debugMode == 6u) {
+        let n = normalize(input.normal);
+        let L = normalize(u.lightDir);
+        let diffuse = max(dot(n, L), 0.0);
+        let light = u.ambient + u.diffuseFactor * diffuse;
+        if (u.hasTexture != 0u) {
+            result.color = vec4f(vec3f(light), u.alpha);
+        } else {
+            result.color = vec4f(vec3f(0.85, 0.25, 0.25) * light, u.alpha);
+        }
+        return result;
+    }
+    // --- end debugMode; then solid vertex color, then default shaded ---
+    if (u.solidColorMode != 0u) {
+        result.color = vec4f(u.fadeColor.xyz, u.alpha);
         return result;
     }
     let n = normalize(input.normal);
@@ -79,7 +163,7 @@ fn fragmentMain(input: VertexOutput) -> FragmentOutput {
     let diffuse = max(dot(n, L), 0.0);
     let light = u.ambient + u.diffuseFactor * diffuse;
     if (u.hasTexture != 0u) {
-        let texColor = textureSample(tex, samp, input.texCoord);
+        let texColor = textureSampleLevel(tex, samp, input.texCoord, 0.0);
         result.color = vec4f(texColor.rgb * light, texColor.a * u.alpha);
     } else {
         result.color = vec4f(vec3f(0.7, 0.7, 0.8) * light, u.alpha);
@@ -91,21 +175,43 @@ fn fragmentMain(input: VertexOutput) -> FragmentOutput {
 }
 @fragment
 fn fragmentMainColorOnly(input: VertexOutput) -> @location(0) vec4f {
-    if (u.debugMode == 1u) {
+    // Mirror fragmentMain debugMode + solidColor branches (single color target).
+    if (pd.debugMode == 1u) {
         return vec4f(input.texCoord.x, input.texCoord.y, 0.0, 1.0);
     }
-    if (u.debugMode == 2u) {
+    if (pd.debugMode == 2u) {
         let uv = input.texCoord * 8.0;
         let cx = i32(floor(uv.x));
         let cy = i32(floor(uv.y));
         let c = f32((cx + cy) % 2);
         return vec4f(c, c, c, 1.0);
     }
-    if (u.debugMode == 3u) {
+    if (pd.debugMode == 3u) {
         return vec4f(1.0, 0.0, 0.0, 1.0);
     }
-    if (u.fadeColor.r >= 0.0) {
-        return vec4f(u.fadeColor, u.alpha);
+    if (pd.debugMode == 4u) {
+        if (u.hasTexture != 0u) {
+            let texColor = textureSampleLevel(tex, samp, input.texCoord, 0.0);
+            return vec4f(texColor.rgb, texColor.a * u.alpha);
+        }
+        return vec4f(1.0, 0.0, 1.0, 1.0);
+    }
+    if (pd.debugMode == 5u) {
+        let nn = normalize(input.normal) * 0.5 + 0.5;
+        return vec4f(nn, 1.0);
+    }
+    if (pd.debugMode == 6u) {
+        let n = normalize(input.normal);
+        let L = normalize(u.lightDir);
+        let diffuse = max(dot(n, L), 0.0);
+        let light = u.ambient + u.diffuseFactor * diffuse;
+        if (u.hasTexture != 0u) {
+            return vec4f(vec3f(light), u.alpha);
+        }
+        return vec4f(vec3f(0.85, 0.25, 0.25) * light, u.alpha);
+    }
+    if (u.solidColorMode != 0u) {
+        return vec4f(u.fadeColor.xyz, u.alpha);
     }
     let n = normalize(input.normal);
     let L = normalize(u.lightDir);
@@ -113,7 +219,7 @@ fn fragmentMainColorOnly(input: VertexOutput) -> @location(0) vec4f {
     let light = u.ambient + u.diffuseFactor * diffuse;
     var out: vec4f;
     if (u.hasTexture != 0u) {
-        let texColor = textureSample(tex, samp, input.texCoord);
+        let texColor = textureSampleLevel(tex, samp, input.texCoord, 0.0);
         out = vec4f(texColor.rgb * light, texColor.a * u.alpha);
     } else {
         out = vec4f(vec3f(0.7, 0.7, 0.8) * light, u.alpha);
@@ -152,18 +258,22 @@ struct Uniforms {
     fadeColor: vec3f,
 }
 @group(0) @binding(0) var<uniform> u: Uniforms;
-struct QuadDualOutput {
-    @location(0) objectId: vec4u,
-    @location(1) color: vec4f,
+struct QuadPickColorOutput {
+    @location(0) idType: u32,
+    @location(1) objectId: u32,
+    @location(2) subObjectId: u32,
+    @location(3) color: vec4f,
 }
 @vertex
 fn vertexMain(@location(0) position: vec3f) -> @builtin(position) vec4f {
     return vec4f(position, 1.0);
 }
 @fragment
-fn fragmentMain() -> QuadDualOutput {
-    var out: QuadDualOutput;
-    out.objectId = vec4u(0u, 0u, 0u, 0u);
+fn fragmentMain() -> QuadPickColorOutput {
+    var out: QuadPickColorOutput;
+    out.idType = 0u;
+    out.objectId = 0u;
+    out.subObjectId = 0u;
     out.color = vec4f(u.fadeColor, u.alpha);
     return out;
 }
@@ -202,22 +312,44 @@ function lookAt(
     ]);
 }
 
+/** Deformed vertex i uses mesh.uvs[i] when i is bound; blended verts borrow UV from blendBindings[i - uvs.length].otherVertexIndex. */
+function meshVertexUv(mesh: MeshData, vertexIndex: number): Vec2 {
+    const uvs = mesh.uvs;
+    if (vertexIndex < uvs.length) return uvs[vertexIndex] ?? { x: 0, y: 0 };
+    const blendIdx = vertexIndex - uvs.length;
+    const bb = mesh.blendBindings[blendIdx];
+    const src = bb?.otherVertexIndex;
+    if (src !== undefined && src >= 0 && src < uvs.length) return uvs[src] ?? { x: 0, y: 0 };
+    return { x: 0, y: 0 };
+}
+
 const FADE_SENTINEL = -1;
 const UNIFORM_SIZE = 256;
 const QUAD_UNIFORM_SIZE = 32;
+const PICK_DEBUG_UNIFORM_SIZE = 256;
+
+/** Byte offsets for mesh `Uniforms` @binding(0) (WGSL). `fadeColor` is vec4f (.w padding); pick/debug u32s use @binding(3). */
+const U_MESH_ALPHA = 140;
+const U_MESH_FADE = 144;
+const U_MESH_HAS_TEX = 160;
+const U_MESH_SOLID = 164;
+const U_MESH_AMBIENT = 168;
+const U_MESH_DIFFUSE = 172;
+const U_MESH_HIGHLIGHT = 176;
+/** Pick buffer `idType` (`PickDebugUniforms`, binding 3). Use values outside mesh `debugMode` 0..6 for extra safety. */
 export const ObjectIdType = {
     NONE: 0,
-    CHARACTER: 1,
-    OBJECT: 2,
-    WALL: 3,
-    FLOOR: 4,
-    TERRAIN: 5,
+    CHARACTER: 16,
+    OBJECT: 17,
+    WALL: 18,
+    FLOOR: 19,
+    TERRAIN: 20,
     /** Plumb-bob diamond above a character; objectId is the character it refers to. */
-    PLUMB_BOB: 6,
+    PLUMB_BOB: 21,
 } as const;
 export type ObjectIdType = (typeof ObjectIdType)[keyof typeof ObjectIdType];
 
-/** Sub-object slot for characters: body, head, hands, accessories (0–255). */
+/** Sub-object slot for characters: body, head, hands, accessories; full u32 in pick buffers. */
 export const SubObjectId = {
     BODY: 0,
     HEAD: 1,
@@ -230,6 +362,15 @@ export type SubObjectId = (typeof SubObjectId)[keyof typeof SubObjectId];
 
 const DEBUG_PASS_LOGS = 2;
 const DEBUG_UNIFORM_LOGS = 8;
+
+/** Three r32uint MRT layers (id type, object id, sub-object id) plus swapchain color; see device.limits.maxColorAttachments (minimum 4). */
+type PickLayerTextures = {
+    idType: GPUTexture;
+    objectId: GPUTexture;
+    subObjectId: GPUTexture;
+};
+
+const PICK_READ_BYTES_PER_ROW = 256;
 
 export class Renderer {
     private static loggedMeshes = new Set<string>();
@@ -257,7 +398,6 @@ export class Renderer {
     private quadPipelineDual!: GPURenderPipeline;
     private meshBindGroupLayout!: GPUBindGroupLayout;
     private quadBindGroupLayout!: GPUBindGroupLayout;
-    private uniformBuffer!: GPUBuffer;
     private quadUniformBuffer!: GPUBuffer;
     private defaultSampler!: GPUSampler;
     private dummyTexture!: GPUTexture;
@@ -271,13 +411,15 @@ export class Renderer {
     private highlight = new Float32Array([0, 0, 0, 0]);
     private cullingEnabled = true;
 
-    private objectIdTexture: GPUTexture | null = null;
-    /** 0=normal, 1=UV as RG, 2=UV checker, 3=solid red. Test slices to isolate texture/UV path. */
+    private pickTextures: PickLayerTextures | null = null;
+    /** WGSL `PickDebugUniforms.debugMode` (binding 3); see {@link MeshFragmentDebugMode}. */
     private debugSliceMode = 0;
     /** When set, drawDiamond draws these meshes (plug-in plumb-bob); all use the same transform. */
     private plumbBobMeshes: MeshData[] | null = null;
     /** Scale multiplier for plumb-bob (applied to size in drawDiamond). Default 1. */
     private plumbBobScale = 1;
+    /** True only while `drawDiamond` invokes `drawMesh` — solid vertex color must not infer from fadeColor elsewhere. */
+    private meshSolidVertexPass = false;
 
     private currentEncoder: GPUCommandEncoder | null = null;
     private currentPass: GPURenderPassEncoder | null = null;
@@ -297,6 +439,10 @@ export class Renderer {
         if (!adapter) throw new Error('WebGPU not available');
         this.device = await adapter.requestDevice();
         this.queue = this.device.queue;
+        const maxAtt = this.device.limits.maxColorAttachments;
+        if (maxAtt < 4) {
+            throw new Error(`WebGPU: need maxColorAttachments >= 4 for pick MRT (got ${maxAtt})`);
+        }
 
         const ctx = this.canvas.getContext('webgpu');
         if (!ctx) throw new Error('WebGPU canvas context not available');
@@ -308,10 +454,6 @@ export class Renderer {
             alphaMode: 'opaque',
         });
 
-        this.uniformBuffer = this.device.createBuffer({
-            size: UNIFORM_SIZE,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
         this.quadUniformBuffer = this.device.createBuffer({
             size: QUAD_UNIFORM_SIZE,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -339,6 +481,11 @@ export class Renderer {
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.FRAGMENT,
+                    buffer: { type: 'uniform', minBindingSize: 16 },
+                },
             ],
         });
         this.quadBindGroupLayout = this.device.createBindGroupLayout({
@@ -371,11 +518,17 @@ export class Renderer {
             module: meshModule,
             entryPoint: 'fragmentMain',
             targets: [
-                { format: 'rgba32uint' },
+                { format: 'r32uint' },
+                { format: 'r32uint' },
+                { format: 'r32uint' },
                 { format: this.format },
             ],
         };
-        console.log('[renderer] mesh pipeline targets: [0]=rgba32uint(objectId) [1]=', this.format, '(color)');
+        console.log(
+            '[renderer] mesh pipeline targets: [0-2]=r32uint(idType,objectId,subObjectId) [3]=',
+            this.format,
+            '(color)',
+        );
         const meshDepthStencil: GPUDepthStencilState = {
             format: 'depth24plus',
             depthWriteEnabled: true,
@@ -455,7 +608,9 @@ export class Renderer {
                 module: quadDualModule,
                 entryPoint: 'fragmentMain',
                 targets: [
-                    { format: 'rgba32uint' },
+                    { format: 'r32uint' },
+                    { format: 'r32uint' },
+                    { format: 'r32uint' },
                     { format: this.format },
                 ],
             },
@@ -471,21 +626,27 @@ export class Renderer {
     setViewport(x: number, y: number, w: number, h: number): void {
         this.viewport = { x, y, w, h };
         if (this.depthTexture) this.depthTexture.destroy();
-        if (this.objectIdTexture) this.objectIdTexture.destroy();
+        if (this.pickTextures) {
+            this.pickTextures.idType.destroy();
+            this.pickTextures.objectId.destroy();
+            this.pickTextures.subObjectId.destroy();
+        }
         if (w > 0 && h > 0) {
             this.depthTexture = this.device.createTexture({
                 size: [w, h, 1],
                 format: 'depth24plus',
                 usage: GPUTextureUsage.RENDER_ATTACHMENT,
             });
-            this.objectIdTexture = this.device.createTexture({
-                size: [w, h, 1],
-                format: 'rgba32uint',
-                usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-            });
+            const pickUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC;
+            const size: GPUExtent3D = [w, h, 1];
+            this.pickTextures = {
+                idType: this.device.createTexture({ size, format: 'r32uint', usage: pickUsage }),
+                objectId: this.device.createTexture({ size, format: 'r32uint', usage: pickUsage }),
+                subObjectId: this.device.createTexture({ size, format: 'r32uint', usage: pickUsage }),
+            };
         } else {
             this.depthTexture = null;
-            this.objectIdTexture = null;
+            this.pickTextures = null;
         }
     }
 
@@ -495,9 +656,14 @@ export class Renderer {
         };
     }
 
-    /** Test slices: 0=normal, 1=UV as RG, 2=UV checker 8x8, 3=solid red. Use to isolate texture vs UV vs pipeline. */
-    setDebugSlice(mode: 0 | 1 | 2 | 3): void {
-        this.debugSliceMode = mode;
+    /**
+     * Sets WGSL `PickDebugUniforms.debugMode` (binding 3) for mesh fragments ({@link MeshFragmentDebugMode}).
+     * Values outside `0..MESH_FRAGMENT_DEBUG_MODE_MAX` clamp.
+     */
+    setDebugSlice(mode: number): void {
+        const m = Math.max(0, Math.min(MESH_FRAGMENT_DEBUG_MODE_MAX, Math.floor(Number(mode)) || 0));
+        if (this.debugSliceMode !== m) Renderer._loggedDebugSlice = false;
+        this.debugSliceMode = m;
     }
 
     private _endFrame(): void {
@@ -525,10 +691,23 @@ export class Renderer {
         }
         const clearVal: GPUColor = clearColor ?? { r: 0.1, g: 0.1, b: 0.15, a: 1 };
         const colorAttachments: GPURenderPassColorAttachment[] = [];
-        if (this.objectIdTexture) {
+        if (this.pickTextures) {
+            const uintClear: GPUColor = { r: 0, g: 0, b: 0, a: 0 };
             colorAttachments.push({
-                view: this.objectIdTexture.createView(),
-                clearValue: { r: 0, g: 0, b: 0, a: 0 },
+                view: this.pickTextures.idType.createView(),
+                clearValue: uintClear,
+                loadOp: 'clear',
+                storeOp: 'store',
+            });
+            colorAttachments.push({
+                view: this.pickTextures.objectId.createView(),
+                clearValue: uintClear,
+                loadOp: 'clear',
+                storeOp: 'store',
+            });
+            colorAttachments.push({
+                view: this.pickTextures.subObjectId.createView(),
+                clearValue: uintClear,
                 loadOp: 'clear',
                 storeOp: 'store',
             });
@@ -558,16 +737,19 @@ export class Renderer {
         if (Renderer._passLogCount < DEBUG_PASS_LOGS) {
             Renderer._passLogCount++;
             const n = colorAttachments.length;
-            const objSize = this.objectIdTexture
-                ? `${this.objectIdTexture.width}x${this.objectIdTexture.height}`
+            const objSize = this.pickTextures
+                ? `${this.pickTextures.idType.width}x${this.pickTextures.idType.height}`
                 : 'none';
             console.log('[renderer] _beginPass', {
                 passLog: Renderer._passLogCount,
                 numAttachments: n,
-                attachmentOrder: n === 2 ? 'att0=objectId(rgba32uint) att1=swapChain(color)' : 'att0=swapChain',
+                attachmentOrder:
+                    n === 4
+                        ? 'att0-2=r32uint(idType,objectId,subObjectId) att3=swapChain(color)'
+                        : 'att0=swapChain',
                 viewport: { ...this.viewport },
                 swapChainSize: tex.width + 'x' + tex.height,
-                objectIdTextureSize: objSize,
+                pickTextureSize: objSize,
             });
         }
         this.currentPass = this.currentEncoder.beginRenderPass(passDesc);
@@ -583,7 +765,7 @@ export class Renderer {
 
     fadeScreen(r = 0.1, g = 0.1, b = 0.15, alpha = 0.3): void {
         this._beginPass(null);
-        const useDual = this.objectIdTexture != null;
+        const useDual = this.pickTextures != null;
         this.currentPass!.setPipeline(useDual ? this.quadPipelineDual : this.quadPipeline);
         const quadVerts = new Float32Array([
             -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0,
@@ -663,7 +845,7 @@ export class Renderer {
         for (let i = 0; i < vertices.length; i++) {
             const v = vertices[i];
             const n = normals[i];
-            const uv = mesh.uvs[i] || { x: 0, y: 0 };
+            const uv = meshVertexUv(mesh, i);
             if (v && n) {
                 posData.push(v.x, v.y, v.z);
                 normData.push(n.x, n.y, n.z);
@@ -715,67 +897,92 @@ export class Renderer {
         view.setFloat32(128, this.lightDir[0], true);
         view.setFloat32(132, this.lightDir[1], true);
         view.setFloat32(136, this.lightDir[2], true);
-        view.setFloat32(140, this.alpha, true);
-        const useFade = texToBind == null && this.fadeColor[0] >= 0;
-        const fadeR = useFade ? this.fadeColor[0] : FADE_SENTINEL;
-        const fadeG = useFade ? this.fadeColor[1] : FADE_SENTINEL;
-        const fadeB = useFade ? this.fadeColor[2] : FADE_SENTINEL;
+        view.setFloat32(U_MESH_ALPHA, this.alpha, true);
+        const useSolidColor = texToBind == null && this.meshSolidVertexPass;
+        const fadeR = useSolidColor ? this.fadeColor[0] : FADE_SENTINEL;
+        const fadeG = useSolidColor ? this.fadeColor[1] : FADE_SENTINEL;
+        const fadeB = useSolidColor ? this.fadeColor[2] : FADE_SENTINEL;
         const hasTexU32 = texToBind ? 1 : 0;
+        const solidColorU32 = useSolidColor ? 1 : 0;
         if (Renderer._uniformLogCount < DEBUG_UNIFORM_LOGS && texToBind != null) {
             Renderer._uniformLogCount++;
-            const useDualForLog = this.objectIdTexture != null;
+            const useDualForLog = this.pickTextures != null;
             console.log('[renderer] drawMesh uniform (textured)', {
                 mesh: mesh.name,
                 uniformLog: Renderer._uniformLogCount,
                 fadeR, fadeG, fadeB,
                 expectFadeSentinel: fadeR === FADE_SENTINEL && fadeG === FADE_SENTINEL && fadeB === FADE_SENTINEL,
                 hasTexture: hasTexU32,
-                useFade,
+                solidColorMode: solidColorU32,
                 useDualPipeline: useDualForLog,
             });
         }
-        view.setFloat32(144, fadeR, true);
-        view.setFloat32(148, fadeG, true);
-        view.setFloat32(152, fadeB, true);
-        view.setUint32(156, hasTexU32, true);
-        view.setFloat32(160, this.ambient, true);
-        view.setFloat32(164, this.diffuseFactor, true);
-        // WGSL: vec4f highlight aligns to 16; diffuseFactor ends at 168 → pad 168–175, highlight @176.
-        view.setFloat32(176, this.highlight[0], true);
-        view.setFloat32(180, this.highlight[1], true);
-        view.setFloat32(184, this.highlight[2], true);
-        view.setFloat32(188, this.highlight[3], true);
-        view.setUint32(192, (objectId?.type ?? 0) & 0xff, true);
-        view.setUint32(196, (objectId?.objectId ?? 0) >>> 0, true);
-        view.setUint32(200, ((objectId?.subObjectId ?? 0) & 0xff) >>> 0, true);
+        view.setFloat32(U_MESH_FADE, fadeR, true);
+        view.setFloat32(U_MESH_FADE + 4, fadeG, true);
+        view.setFloat32(U_MESH_FADE + 8, fadeB, true);
+        view.setFloat32(U_MESH_FADE + 12, 0, true);
+        view.setUint32(U_MESH_HAS_TEX, hasTexU32, true);
+        view.setUint32(U_MESH_SOLID, solidColorU32, true);
+        view.setFloat32(U_MESH_AMBIENT, this.ambient, true);
+        view.setFloat32(U_MESH_DIFFUSE, this.diffuseFactor, true);
+        view.setFloat32(U_MESH_HIGHLIGHT, this.highlight[0], true);
+        view.setFloat32(U_MESH_HIGHLIGHT + 4, this.highlight[1], true);
+        view.setFloat32(U_MESH_HIGHLIGHT + 8, this.highlight[2], true);
+        view.setFloat32(U_MESH_HIGHLIGHT + 12, this.highlight[3], true);
         const debugModeU32 = (this.debugSliceMode ?? 0) >>> 0;
-        view.setUint32(204, debugModeU32, true);
         if (debugModeU32 !== 0 && !Renderer._loggedDebugSlice) {
             Renderer._loggedDebugSlice = true;
-            console.log('[renderer] debugSlice active', { mode: debugModeU32, '0=normal 1=UV 2=checker 3=red': true });
+            console.log('[renderer] debugSlice', debugModeU32, meshFragmentDebugModeLabel(debugModeU32));
         }
         if (Renderer._uniformLogCount <= 1 && texToBind != null) {
             const u8 = new Uint8Array(uniformData);
-            const fadeHex = Array.from(u8.slice(144, 160)).map(b => b.toString(16).padStart(2, '0')).join(' ');
-            console.log('[renderer] uniform bytes fadeColor+hasTexture @144', { mesh: mesh.name, fadeHex, reRead: [view.getFloat32(144, true), view.getFloat32(148, true), view.getFloat32(152, true)], hasTex: view.getUint32(156, true) });
+            const fadeHex = Array.from(u8.slice(U_MESH_FADE, U_MESH_HAS_TEX + 4)).map((b) =>
+                b.toString(16).padStart(2, '0'),
+            ).join(' ');
+            console.log('[renderer] uniform bytes fade(vec4)+flags @144', {
+                mesh: mesh.name,
+                fadeHex,
+                reRead: [
+                    view.getFloat32(U_MESH_FADE, true),
+                    view.getFloat32(U_MESH_FADE + 4, true),
+                    view.getFloat32(U_MESH_FADE + 8, true),
+                ],
+                hasTex: view.getUint32(U_MESH_HAS_TEX, true),
+                solid: view.getUint32(U_MESH_SOLID, true),
+            });
         }
-        this.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
+        // Fresh uniform buffers per draw: all queue.writeBuffer calls for a frame are ordered before
+        // queue.submit(encoder); a single shared buffer would leave every draw seeing the last write (plumb-bob solid green).
+        const meshUniformBuffer = this.device.createBuffer({
+            size: UNIFORM_SIZE,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        this.queue.writeBuffer(meshUniformBuffer, 0, uniformData);
+
+        const pickDbg = new ArrayBuffer(16);
+        const pdv = new DataView(pickDbg);
+        pdv.setUint32(0, debugModeU32, true);
+        pdv.setUint32(4, (objectId?.type ?? 0) >>> 0, true);
+        pdv.setUint32(8, (objectId?.objectId ?? 0) >>> 0, true);
+        pdv.setUint32(12, (objectId?.subObjectId ?? 0) >>> 0, true);
+        const pickUniformBuffer = this.device.createBuffer({
+            size: PICK_DEBUG_UNIFORM_SIZE,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        this.queue.writeBuffer(pickUniformBuffer, 0, pickDbg);
 
         const texToUse = texToBind ?? this.dummyTexture;
-        if (texToBind != null && Renderer._uniformLogCount <= DEBUG_UNIFORM_LOGS) {
-            const label = (texToUse as GPUTexture).label ?? 'unknown';
-            console.log('[renderer] drawMesh bindGroup', { mesh: mesh.name, textureLabel: label });
-        }
         const meshBindGroup = this.device.createBindGroup({
             layout: this.meshBindGroupLayout,
             entries: [
-                { binding: 0, resource: { buffer: this.uniformBuffer } },
+                { binding: 0, resource: { buffer: meshUniformBuffer } },
                 { binding: 1, resource: texToUse.createView() },
                 { binding: 2, resource: this.defaultSampler },
+                { binding: 3, resource: { buffer: pickUniformBuffer } },
             ],
         });
 
-        const useDual = this.objectIdTexture != null;
+        const useDual = this.pickTextures != null;
         const meshPipe = useDual
             ? (this.cullingEnabled ? this.meshPipeline : this.meshPipelineNoCull)
             : (this.cullingEnabled ? this.meshPipelineSingle : this.meshPipelineNoCullSingle);
@@ -796,7 +1003,7 @@ export class Renderer {
         this.currentPass!.setVertexBuffer(0, vb);
         this.currentPass!.setIndexBuffer(ib, 'uint16');
         this.currentPass!.drawIndexed(indexData.length);
-        this.buffersToDestroy.push(vb, ib);
+        this.buffersToDestroy.push(meshUniformBuffer, pickUniformBuffer, vb, ib);
     }
 
     drawDiamond(
@@ -815,9 +1022,14 @@ export class Renderer {
         this.fadeColor[0] = r;
         this.fadeColor[1] = g;
         this.fadeColor[2] = b;
-        for (const mesh of meshes) {
-            const { vertices, normals } = transformMesh(mesh, x, y, z, rotY, effectiveSize);
-            this.drawMesh(mesh, vertices, normals, null, objectId);
+        this.meshSolidVertexPass = true;
+        try {
+            for (const mesh of meshes) {
+                const { vertices, normals } = transformMesh(mesh, x, y, z, rotY, effectiveSize);
+                this.drawMesh(mesh, vertices, normals, null, objectId);
+            }
+        } finally {
+            this.meshSolidVertexPass = false;
         }
         this.alpha = savedAlpha;
         this.fadeColor.set(savedFade);
@@ -827,30 +1039,42 @@ export class Renderer {
     private static readonly DEBUG_READ_OBJECT_ID_LOGS = 5;
 
     async readObjectIdAt(screenX: number, screenY: number): Promise<{ type: number; objectId: number; subObjectId: number }> {
-        if (!this.objectIdTexture) return { type: ObjectIdType.NONE, objectId: 0, subObjectId: 0 };
+        if (!this.pickTextures) return { type: ObjectIdType.NONE, objectId: 0, subObjectId: 0 };
         const w = this.viewport.w;
         const h = this.viewport.h;
         const x = Math.max(0, Math.min(w - 1, Math.floor(screenX) - this.viewport.x));
         const y = Math.max(0, Math.min(h - 1, Math.floor(screenY) - this.viewport.y));
 
-        const bytesPerRow = 256;
+        const bytesPerRow = PICK_READ_BYTES_PER_ROW;
         const buffer = this.device.createBuffer({
-            size: bytesPerRow,
+            size: bytesPerRow * 3,
             usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
         });
         const encoder = this.device.createCommandEncoder();
+        const extent: GPUExtent3D = [1, 1, 1];
+        const origin: GPUOrigin3D = [x, y, 0];
         encoder.copyTextureToBuffer(
-            { texture: this.objectIdTexture, origin: [x, y, 0] },
-            { buffer, bytesPerRow, rowsPerImage: 1 },
-            [1, 1, 1],
+            { texture: this.pickTextures.idType, origin },
+            { buffer, offset: 0, bytesPerRow, rowsPerImage: 1 },
+            extent,
+        );
+        encoder.copyTextureToBuffer(
+            { texture: this.pickTextures.objectId, origin },
+            { buffer, offset: bytesPerRow, bytesPerRow, rowsPerImage: 1 },
+            extent,
+        );
+        encoder.copyTextureToBuffer(
+            { texture: this.pickTextures.subObjectId, origin },
+            { buffer, offset: bytesPerRow * 2, bytesPerRow, rowsPerImage: 1 },
+            extent,
         );
         this.queue.submit([encoder.finish()]);
         await buffer.mapAsync(GPUMapMode.READ);
         const mapped = buffer.getMappedRange();
         const dv = new DataView(mapped);
-        const type = dv.getUint32(0, true) & 0xff;
-        const objectId = dv.getUint32(4, true);
-        const subObjectId = dv.getUint32(8, true) & 0xff;
+        const type = dv.getUint32(0, true);
+        const objectId = dv.getUint32(bytesPerRow, true);
+        const subObjectId = dv.getUint32(bytesPerRow * 2, true);
         if (Renderer._readObjectIdLogCount < Renderer.DEBUG_READ_OBJECT_ID_LOGS) {
             Renderer._readObjectIdLogCount++;
             const raw = new Uint8Array(mapped);

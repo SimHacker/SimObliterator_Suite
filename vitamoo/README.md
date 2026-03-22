@@ -33,3 +33,75 @@ Open the preview URL (e.g. `http://localhost:4173/`) for the Spin the Sims demo.
 - **Full demo:** use or fork `vitamoospace`; swap assets and content index to rebrand.
 
 See **DOCUMENTATION.md** in this directory for full API and layer boundaries, data formats, and how to extend or build on top.
+
+---
+
+## WebGPU mesh uniforms (binding layout)
+
+The mesh shader uses **two uniform bindings** so pick/debug integers never share the same `vec3`/`vec4` packing as lighting fields (avoids backend aliasing bugs):
+
+| Binding | WGSL struct | Purpose |
+|--------|-------------|---------|
+| **0** | `Uniforms` | `projection`, `modelView`, `lightDir`, `alpha`, `fadeColor` (vec4: RGB tint or sentinel when textured), `hasTexture` / `solidColorMode` (u32), `ambient`, `diffuseFactor`, `highlight` (vec4). Packed to **256 bytes** (`UNIFORM_SIZE`). |
+| **3** | `PickDebugUniforms` | `debugMode`, `idType`, `objectId`, `subObjectId` (four u32). **256-byte** buffer (`PICK_DEBUG_UNIFORM_SIZE`) for alignment. |
+
+**Per-draw uniform buffers:** each `drawMesh` allocates **fresh** GPU buffers for bindings 0 and 3, writes them, draws, then queues them for destruction after `endFrame`. Reusing one buffer and overwriting it for every mesh in the same render pass is invalid on WebGPU: all draws would see the **last** write (for example every character rendered with the plumb-bob’s solid color). Per-draw buffers fix that.
+
+---
+
+## Object-ID picking
+
+When the dual-output pipeline is active, the main pass writes **three `r32uint` attachments** (plus the swapchain): **id type**, **object id**, **sub-object id**. Fragments copy pick fields from `PickDebugUniforms` on binding 3.
+
+- **`ObjectIdType`** (in `vitamoo` / `renderer.ts`): `NONE`, `CHARACTER`, `OBJECT`, `WALL`, `FLOOR`, `TERRAIN`, `PLUMB_BOB`. Character meshes and plumb-bobs use types **`CHARACTER`** and **`PLUMB_BOB`**; **`objectId`** is the **body index** in the current scene (same index `MooShowStage` uses for `selectActor`).
+- **`subObjectId`**: mesh slot within that body (body, head, hands, etc.); see `SubObjectId` in the renderer module.
+
+**`Renderer.readObjectIdAt(screenX, screenY)`** copies one texel from each pick texture into a readback buffer (coordinates are **canvas buffer pixels**, origin top-left within the active viewport). It returns `{ type, objectId, subObjectId }`.
+
+**`MooShowStage`** (in `mooshow`) maps **client** coordinates to buffer space using `canvas.width/height` vs `getBoundingClientRect()`, then calls `readObjectIdAt`. Clicks on a character or its plumb-bob select that actor; click on empty background with **multiple** bodies clears selection to **All** (`selectActor(-1)`).
+
+---
+
+## Default controls (`MooShowStage`)
+
+Bindings below are implemented in **`mooshow`** on the stage canvas (skipped while a `<select>`, `<input>`, or `<textarea>` is focused). The **vitamoospace** app wires **`onKeyAction`** so the on-screen UI stays in sync (sliders, pause label, menus).
+
+### Mouse
+
+| Input | Effect |
+|-------|--------|
+| **Left drag** | Spin selected actor(s) or all bodies; vertical drag zooms. Release can leave **spin momentum**. |
+| **Shift + left drag** | Treated as **right drag**: orbit **camera** (`rotY` / `rotX`), not body spin. |
+| **Right drag** | Orbit camera (yaw + tilt). |
+| **Wheel** | Zoom (hold **Ctrl** for coarser steps). |
+| **Click** | Pick: character or plumb-bob selects that **body index**; miss with 2+ bodies → **All**. |
+
+### Keyboard
+
+| Keys | Effect |
+|------|--------|
+| **1 – 9** | Animation speed presets (slider values **25, 50, 100, 150, 200, 300, 500, 750, 1000** → `speedScale = value / 100`). Also **unpauses**. |
+| **0**, **z** | Toggle **pause** / **play**. |
+| **Space** | Next actor (**Shift** = previous); can transfer spin momentum to the selected body. |
+| **N** / **P** | Next / previous **scene** (when the app handles `onKeyAction`). |
+| **D** / **A** | Next / previous **actor**. |
+| **S** / **W** | Next / previous **character** preset. |
+| **E** / **Q** | Next / previous **animation**. |
+| **↑** / **↓** | Zoom in / out (held). |
+| **←** / **→** | Spin (held; speed ramps up over time). |
+| **H**, **?** | Toggle help (app hook). |
+| **Escape** | Toggle help (app hook). |
+
+### Shader debug (URL only)
+
+Mesh **debug view modes** (UV, normals, solid tests, etc.) are selected with the query parameter **`?debugSlice=0`** … **`6`** on the page URL, **not** with number keys. Digit keys are reserved for **animation speed** as above.
+
+---
+
+## GitHub Pages (fork)
+
+The workflow **Deploy VitaMooSpace to GitHub Pages** runs on pushes to **`main`** that touch the vitamoo paths (see `.github/workflows/pages.yml`), or manually via **Actions → Run workflow**. It only deploys if **`VITAMOOSPACE_PAGES_URL`** is set (repository variable or secret). Manual CLI:
+
+```bash
+gh workflow run "Deploy VitaMooSpace to GitHub Pages" --repo OWNER/REPO
+```

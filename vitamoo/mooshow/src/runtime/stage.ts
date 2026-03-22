@@ -1,8 +1,27 @@
 /// <reference types="@webgpu/types" />
-import { Renderer, ObjectIdType, updateTransforms, deformMesh, loadGltfMeshes } from 'vitamoo';
+import {
+    Renderer,
+    ObjectIdType,
+    updateTransforms,
+    deformMesh,
+    loadGltfMeshes,
+    MESH_FRAGMENT_DEBUG_MODE_MAX,
+} from 'vitamoo';
 
 type ResolvedRenderer = Awaited<ReturnType<typeof Renderer.create>> | null;
-type RendererWithDebug = NonNullable<ResolvedRenderer> & { setDebugSlice(mode: 0 | 1 | 2 | 3): void };
+type RendererWithDebug = NonNullable<ResolvedRenderer> & { setDebugSlice(mode: number): void };
+
+const SPEED_KEY_SLIDER: Record<string, number> = {
+    '1': 25,
+    '2': 50,
+    '3': 100,
+    '4': 150,
+    '5': 200,
+    '6': 300,
+    '7': 500,
+    '8': 750,
+    '9': 1000,
+};
 import type { MooShowHooks } from '../hooks/types.js';
 import { defaultHooks } from '../hooks/defaults.js';
 import { ContentLoader } from './content-loader.js';
@@ -40,6 +59,8 @@ export class MooShowStage {
     private _paused = false;
     private _speedScale = 1.0;
     private _keysHeld = { up: false, down: false, left: false, right: false, leftStart: 0, rightStart: 0 };
+    /** Motion trail (fadeScreen): auto = spin+top; off = always clear; force = always fade. */
+    private _trailMode: 'auto' | 'off' | 'force' = 'auto';
 
     private _bodies: Body[] = [];
     private _selectedActor = -1;
@@ -87,9 +108,9 @@ export class MooShowStage {
                 const ds = new URLSearchParams(window.location.search).get('debugSlice');
                 if (ds !== null) {
                     const m = parseInt(ds, 10);
-                    if (m >= 0 && m <= 3) {
-                        (r as RendererWithDebug).setDebugSlice(m as 0 | 1 | 2 | 3);
-                        console.log('[stage] debugSlice from URL', m, '(0=normal 1=UV RG 2=checker 3=red)');
+                    if (m >= 0 && m <= MESH_FRAGMENT_DEBUG_MODE_MAX) {
+                        (r as RendererWithDebug).setDebugSlice(m);
+                        console.log('[stage] debugSlice from URL', m);
                     }
                 }
             }
@@ -107,7 +128,8 @@ export class MooShowStage {
                 const ds = new URLSearchParams(window.location.search).get('debugSlice');
                 if (ds !== null) {
                     const m = parseInt(ds, 10);
-                    if (m >= 0 && m <= 3) (this._renderer as RendererWithDebug).setDebugSlice(m as 0 | 1 | 2 | 3);
+                    if (m >= 0 && m <= MESH_FRAGMENT_DEBUG_MODE_MAX)
+                        (this._renderer as RendererWithDebug).setDebugSlice(m);
                 }
             }
         }
@@ -172,6 +194,18 @@ export class MooShowStage {
         }
         this.hooks.onSceneChange?.(null);
         this.hooks.onSelectionChange?.(this._selectedActor);
+        this._renderFrame();
+    }
+
+    async replaceActorCharacter(actorIndex: number, charIndex: number): Promise<void> {
+        const chars = this.loader.index?.characters;
+        const prev = this._bodies[actorIndex];
+        if (!chars?.[charIndex] || !prev) return;
+        const next = await this.loader.loadCharacterBodyReplacing(chars[charIndex], prev);
+        if (!next) return;
+        this._bodies[actorIndex] = next;
+        this.hooks.onSelectionChange?.(this._selectedActor);
+        this.sound.simlishGreet(actorIndex, this._bodies);
         this._renderFrame();
     }
 
@@ -352,28 +386,34 @@ export class MooShowStage {
         this._rafId = requestAnimationFrame(this._loop);
     };
 
-    private _debugSliceFromUrl(): 0 | 1 | 2 | 3 | null {
+    private _parseDebugSliceFromUrl(): number | null {
         const ds = new URLSearchParams(window.location.search).get('debugSlice');
         if (ds === null) return null;
         const m = parseInt(ds, 10);
-        return (m >= 0 && m <= 3) ? (m as 0 | 1 | 2 | 3) : null;
+        return m >= 0 && m <= MESH_FRAGMENT_DEBUG_MODE_MAX ? m : null;
+    }
+
+    private _effectiveDebugSlice(): number {
+        return this._parseDebugSliceFromUrl() ?? 0;
     }
 
     private async _renderFrame(): Promise<void> {
         const renderer = await this._getRenderer();
         if (!renderer) return;
 
-        const debugSlice = this._debugSliceFromUrl();
-        if (debugSlice !== null) {
-            (renderer as RendererWithDebug).setDebugSlice(debugSlice);
-        }
+        const slice = this._effectiveDebugSlice();
+        (renderer as RendererWithDebug).setDebugSlice(slice);
 
         const spinSpeed = Math.abs(this.spin.rotationVelocity);
         const anyActive = this._bodies.some(b => b.top.active);
-        const useFadeTrail = anyActive && spinSpeed > 1.0 && debugSlice === null;
+        const useFadeTrail =
+            this._trailMode === 'force' ||
+            (this._trailMode === 'auto' && anyActive && spinSpeed > 1.0 && slice === 0);
 
         if (useFadeTrail) {
-            const trailLength = Math.max(0.08, 0.4 - spinSpeed * 0.02);
+            const trailLength = this._trailMode === 'force'
+                ? 0.22
+                : Math.max(0.08, 0.4 - spinSpeed * 0.02);
             renderer.fadeScreen(0.1, 0.1, 0.15, trailLength);
         } else {
             renderer.clear();
@@ -530,16 +570,24 @@ export class MooShowStage {
                     const bufferX = localX * scaleX;
                     const bufferY = localY * scaleY;
                     const { type, objectId, subObjectId } = await renderer.readObjectIdAt(bufferX, bufferY);
+                    const picked = (type === ObjectIdType.CHARACTER || type === ObjectIdType.PLUMB_BOB) ? objectId : -1;
+                    console.log('[stage] pick', {
+                        type,
+                        objectId,
+                        subObjectId,
+                        picked,
+                        character: ObjectIdType.CHARACTER,
+                        plumbBob: ObjectIdType.PLUMB_BOB,
+                        action: picked >= 0 ? 'selectActor' : (this._bodies.length > 1 ? 'clearSelection' : 'miss'),
+                    });
                     if (_stagePickLogCount < DEBUG_STAGE_PICK_LOGS) {
                         _stagePickLogCount++;
-                        console.log('[stage] mousedown pick', {
+                        console.log('[stage] mousedown pick detail', {
                             rectW: rect.width, rectH: rect.height,
                             canvasW: this.canvas.width, canvasH: this.canvas.height,
                             localX, localY, scaleX, scaleY, bufferX, bufferY,
-                            type, objectId, subObjectId,
                         });
                     }
-                    const picked = (type === ObjectIdType.CHARACTER || type === ObjectIdType.PLUMB_BOB) ? objectId : -1;
                     if (picked >= 0) {
                         this.selectActor(picked);
                         this.hooks.onPick?.(picked, e.clientX, e.clientY);
@@ -605,6 +653,31 @@ export class MooShowStage {
         window.addEventListener('keydown', (e: KeyboardEvent) => {
             if (isInputFocused()) return;
 
+            if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+                const sliderVal = SPEED_KEY_SLIDER[e.key];
+                if (sliderVal !== undefined) {
+                    this._paused = false;
+                    this.speedScale = sliderVal / 100;
+                    this._lastFrameTime = 0;
+                    this.hooks.onKeyAction?.('setSpeed', sliderVal);
+                    e.preventDefault();
+                    this._renderFrame();
+                    return;
+                }
+            }
+
+            if (
+                (e.key === '0' || e.key === 'z' || e.key === 'Z') &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.altKey
+            ) {
+                this.togglePause();
+                this.hooks.onKeyAction?.('togglePause');
+                e.preventDefault();
+                return;
+            }
+
             if (e.key === ' ') {
                 this.sound.ensureAudio();
                 if (this._bodies.length > 0) {
@@ -620,33 +693,6 @@ export class MooShowStage {
                     if (idx < minIdx) idx = this._bodies.length - 1;
                     this.selectActor(idx);
                 }
-                e.preventDefault();
-            }
-
-            if (e.ctrlKey && ['0', '1', '2', '3'].includes(e.key)) {
-                const m = e.key === '0' ? 0 : parseInt(e.key, 10);
-                this._getRenderer().then((r) => {
-                    if (r) {
-                        (r as RendererWithDebug).setDebugSlice(m as 0 | 1 | 2 | 3);
-                        console.log('[stage] debugSlice', m, '0=normal 1=UV RG 2=checker 3=red');
-                    }
-                });
-                e.preventDefault();
-                return;
-            }
-
-            if (e.key === '0' && !e.ctrlKey) {
-                this.togglePause();
-                this.hooks.onKeyAction?.('togglePause');
-                e.preventDefault();
-            }
-
-            const speedKeys: Record<string, number> = { '1': 25, '2': 50, '3': 100, '4': 150, '5': 200, '6': 300, '7': 500, '8': 750, '9': 1000 };
-            if (speedKeys[e.key] && !e.ctrlKey) {
-                this._paused = false;
-                this._speedScale = speedKeys[e.key] / 100;
-                this._lastFrameTime = 0;
-                this.hooks.onKeyAction?.('setSpeed', speedKeys[e.key]);
                 e.preventDefault();
             }
 
