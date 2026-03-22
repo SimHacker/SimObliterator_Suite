@@ -8,10 +8,24 @@
 
 **Single source of truth:** `vitamoo/docs/WEBGPU-RENDERER-DESIGN.md`
 
-- §1: Current WebGPU surface (what’s implemented).
-- §2–3: Advanced features (Sims-style pipeline, terrain/walls/roofs, highlighting, pie menu) — future.
-- §4: Implementation order — steps 1 and 2 done; next is step 3 (object-ID) or later steps.
-- §5: GPU-side skeletal deformation — later.
+- §1: Current WebGPU surface (what is implemented).
+- §2–3: Advanced features (Sims-style pipeline, terrain/walls/roofs, highlighting, pie menu) — mostly future.
+- §4: Holodeck implementation order (steps 1–3 done; next is step 4 onward).
+- §5: GPU-side skeletal deformation — not started; parallel track to §4.
+
+---
+
+## Status snapshot (matches tree)
+
+| Area | State |
+|------|--------|
+| WebGPU draw path (WGSL mesh, depth, fade, plumb-bob) | Done |
+| Textures (`loadTexture`, `getTextureFactory`, mooshow loader) | Done |
+| Object-ID buffer + `readObjectIdAt`; mooshow picking | Done |
+| CPU animation | `Practice.tick`, `updateTransforms`, `deformMesh` in JS; deformed verts uploaded every frame |
+| GPU skeletal deformation / compute | Not started (see §5) |
+| Holodeck background (terrain, sprites, walls) | Not started (§4 steps 4–5) |
+| Highlight / selection tint in app | WGSL has `highlight` + `ambient` uniforms; mooshow does not expose setters yet (defaults only) |
 
 ---
 
@@ -19,9 +33,9 @@
 
 - **Repo:** `SimObliterator_Suite`, subpath `vitamoo/`.
 - **Layers:**
-  - **vitamoo** (core): `vitamoo/vitamoo/` — parsers, skeleton, `deformMesh`, **Renderer** (WebGPU), **loadTexture**.
-  - **mooshow** (runtime): `vitamoo/mooshow/src/` — `MooShowStage`, `ContentLoader`, animation loop; owns canvas and calls renderer.
-  - **vitamoospace** (app): SvelteKit app that uses mooshow; no direct renderer use.
+  - **vitamoo** (core): `vitamoo/vitamoo/` — parsers, skeleton, `deformMesh`, **Renderer** (WebGPU), **loadTexture**, `display-list.ts`, `procedural/diamond.ts`, `loaders/gltf.ts`.
+  - **mooshow** (runtime): `vitamoo/mooshow/src/runtime/stage.ts` — stage loop, `Renderer.create`, `readObjectIdAt` for pick/hover, `setDebugSlice` for debug views.
+  - **vitamoospace** (app): SvelteKit demo; no direct renderer use.
 
 ---
 
@@ -29,57 +43,53 @@
 
 | File | Role |
 |------|------|
-| `vitamoo/vitamoo/renderer.ts` | Single `Renderer` class. WebGPU only. **Creation:** `Renderer.create(canvas)` returns `Promise<Renderer \| null>`. Methods: `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh`, `drawDiamond`, `setViewport(x,y,w,h)`, `endFrame()`, `getTextureFactory()`. No `context`; loader uses texture factory. |
-| `vitamoo/vitamoo/texture.ts` | `parseBMP(buffer)` (pure). `loadTexture(device, queue, url)` returns `Promise<TextureHandle>` (GPUTexture). BMP → parseBMP → ImageData → createImageBitmap → copyExternalImageToTexture; other formats → fetch → createImageBitmap → same. |
+| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas)` → `Promise<Renderer \| null>`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual color attachments: **attachment 0** `rgba32uint` (object id), **attachment 1** surface color. |
+| `vitamoo/vitamoo/texture.ts` | `parseBMP`; `loadTexture(device, queue, url)` → `TextureHandle` (`GPUTexture`). |
 
-**mooshow usage:**
+**mooshow:** `Renderer.create` → `setViewport`, `setTextureFactory`. Each frame: clear/fade → `setCamera` → per body `deformMesh` then `drawMesh` with `ObjectIdType` / body index / mesh index → plumb-bob draws → `endFrame`. Picking: `readObjectIdAt` (character and plumb-bob types). `setDebugSlice` wired from stage config / URL.
 
-- `Renderer.create(canvas)` (async); then `renderer.setViewport(0, 0, w, h)`, `loader.setTextureFactory(renderer.getTextureFactory())`.
-- Per frame: `clear` or `fadeScreen` → `setCamera` → for each body `drawMesh(mesh, verts, norms, texture)` → `drawDiamond(...)` → `renderer.endFrame()`.
-- Texture type: `TextureHandle` (GPUTexture). `BodyMeshEntry.texture` is `TextureHandle | null`.
-
-**Stage render flow:** `_getRenderer()` (resolves renderer promise once) → `fadeScreen` or `clear` → `setCamera` → deform + `drawMesh` → `drawDiamond` → `endFrame`. Depth test and backface culling on.
-
-**Pipelines:** WGSL mesh pass (vertex: position/normal/uv, MVP, lightDir → fragment: diffuse + texture, alpha, fade sentinel). Fullscreen quad for `fadeScreen`. Diamond uses mesh pipeline with solid color (no texture). Depth buffer created in `setViewport`; one encoder/pass per frame, submitted in `endFrame`.
+**Object-ID layout:** Matches §2.3 of the design doc: `vec4u(type, objectId, subObjectId, 0)` in the uint attachment (see `ObjectIdType` in vitamoo exports).
 
 ---
 
-## Object-ID buffer (type + 24-bit id per pixel)
+## Recommended next steps
 
-Shared ID texture: **1 byte type** (0=none, 1=character, 2=object, 3=wall, 4=floor, …) and **24-bit object id**. Stored as `R32Uint`: `(type << 24) | (objectId & 0x00FFFFFF)`. Any pass (characters, objects, walls, floor tiles) can run an object-ID pass after drawing color; it uses the same depth buffer so only visible pixels get a type/id. See WEBGPU-RENDERER-DESIGN §2.3.
+Pick one track and ship a vertical slice.
 
----
+**Holodeck track (§4 step 4+)**  
+1. **Background layer:** First procedural or z-buffered background draw before characters (same depth buffer): minimal grid/quad + one texture, or one sprite path.  
+2. **Walls/roofs** when the background path is stable.  
+3. **§4 steps 6–8:** Expose lighting/highlight APIs on `Renderer` and drive hover/selection from mooshow; pie menu when the app needs it.
 
-## Next pass (choose one and iterate)
+**Performance track (§5)**  
+1. **GPU deformation (Option A):** Keep `Practice` on CPU; upload bone matrices each frame; compute shader (or staged compute) implements vitamoo’s Phase 0 / Phase 1 / blend model; draw from GPU-resident deformed buffer instead of streaming full vertex arrays from JS.  
+2. **Option B** (later): move animation evaluation to GPU.
 
-- **Step 3 — Object-ID:** Implement/wire `beginObjectIdPass`, `drawMeshObjectId`/`drawDiamondObjectId(type, objectId)`, `readObjectIdAt(x,y)`; then walls/floor/objects when added.
-- **Step 4 — Background layer:** z-buffered sprites and/or procedural terrain + floor. See §2.1, §2.2, §4 step 4.
-- **Steps 5–8:** Walls/roofs, lighting, highlight/selection/feedback, pie menu. See §3, §4.
-
-No backwards compat or WebGL preservation; move forward only.
+**Small polish**  
+- Remove or gate verbose `readObjectIdAt` logging in `renderer.ts` if it is still noisy in production.  
+- Optional: bone-level id in the object-ID buffer (§2.3 TODO) for mesh-part picking.
 
 ---
 
 ## Shader reference (current WGSL)
 
-- **Mesh:** `@location(0)` position, `@location(1)` normal, `@location(2)` texCoord. Uniforms: projection, modelView, lightDir, alpha, fadeColor (fade when .r ≥ 0), hasTexture. Fragment: diffuse + texture or untextured gray.
-- **Fullscreen quad:** NDC positions; fragment solid color (fade). No texture.
-- **Diamond:** Same mesh pipeline, solid color, no texture.
+- **Mesh:** Positions/normals/UVs; uniforms include projection, modelView, lightDir, alpha, fadeColor, hasTexture, ambient, diffuseFactor, highlight (vec4), idType/objectId/subObjectId, debugMode. Fragment writes object-id output and color output; diffuse + texture; highlight mix when `highlight.a > 0`.
+- **Fullscreen quad:** Fade only; writes zero object id where dual-target is active.
+- **Diamond:** Mesh pipeline branch, solid color, optional object id.
 
 ---
 
-## What is out of scope (until we choose that step)
+## What is still out of scope until built
 
-- Object-ID pass, picking buffer, layered sprites (step 3).
-- Terrain, floors, walls, roofs, display-list pipeline (steps 4–5; see obliterator-designs).
-- GPU-side skeletal deformation (§5).
-- Highlight/selection/feedback uniforms, pie menu (steps 7–8).
-- Animation/deformation still CPU: `deformMesh` → upload deformed verts each frame.
+- Holodeck terrain, floors, walls, roofs, layered sprite authoring pipeline.
+- GPU-side skeletal deformation and GPU-resident animation (§5).
+- Pie menu passes (desaturate, vignette) and head-in-pie wiring in the app.
+- Display-list **executor** that consumes `DisplayListEntry[]` for the whole scene (types exist; stage still loops bodies explicitly).
 
 ---
 
-## Related design docs (for later)
+## Related design docs
 
-- **obliterator-designs/designs/04-DISPLAY-LISTS-AND-GPU-RESOURCES.md** — Display lists + resource pools (terrain, tiles, walls, roofs, sprites).
-- **obliterator-designs/designs/05-SIMS1-WORLD-RENDER-LAYERS.md** — Sims draw order (static → dynamic → 3D people).
-- **vitamoo/REFACTOR-PLAN.md** — Refactor status.
+- **obliterator-designs/designs/04-DISPLAY-LISTS-AND-GPU-RESOURCES.md** — Display lists + resource pools.
+- **obliterator-designs/designs/05-SIMS1-WORLD-RENDER-LAYERS.md** — Sims draw order.
+- **vitamoo/REFACTOR-PLAN.md** — Broader refactor status.

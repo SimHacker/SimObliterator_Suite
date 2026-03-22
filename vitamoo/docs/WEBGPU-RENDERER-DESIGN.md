@@ -12,24 +12,25 @@ All GPU use is in **vitamoo**; WebGL has been removed.
 
 | File | Role |
 |------|------|
-| `vitamoo/renderer.ts` | Single `Renderer` class. WebGPU only. `Renderer.create(canvas)` → `Promise<Renderer \| null>`. Methods: `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(mesh, verts, norms, texture)`, `drawDiamond(…)`, `setViewport(x,y,w,h)`, `endFrame()`, `getTextureFactory()`. WGSL mesh pass + fullscreen quad (fade) + diamond via mesh pipeline (solid color). One encoder/pass per frame; depth buffer from `setViewport`. |
+| `vitamoo/renderer.ts` | Single `Renderer` class. WebGPU only. `Renderer.create(canvas)` → `Promise<Renderer \| null>`. Methods: `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(mesh, verts, norms, texture?, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. **Dual attachments:** color target + `rgba32uint` object-ID texture (same pass, shared depth). WGSL mesh + fullscreen fade + diamond. One encoder/pass per frame; depth from `setViewport`. |
 | `vitamoo/texture.ts` | `parseBMP(buffer)` (pure). `loadTexture(device, queue, url)` → `Promise<TextureHandle>` (GPUTexture). BMP → parseBMP → ImageData → createImageBitmap → copyExternalImageToTexture; other formats → fetch → createImageBitmap → same. |
 
-**mooshow:** Resolves renderer via `Renderer.create(canvas)`; `setTextureFactory(renderer.getTextureFactory())`, `setViewport(0,0,w,h)`. Per frame: `clear` or `fadeScreen` → `setCamera` → `drawMesh` / `drawDiamond` → `endFrame()`. No raw WebGPU in stage or loader.
+**mooshow:** `Renderer.create(canvas)`; `setTextureFactory`, `setViewport`. Per frame: `clear` or `fadeScreen` → `setCamera` → CPU `deformMesh` then `drawMesh` / `drawDiamond` with pick ids → `endFrame`. Picking and hover use `readObjectIdAt`. `setDebugSlice` is wired for debug display modes. No raw WebGPU in the loader.
 
 **Procedural meshes and display list:** The plumb-bob diamond is implemented as a procedural mesh plug-in: `createDiamondMesh(size?, segments?)` in `vitamoo/procedural/diamond.ts` returns a `MeshData` in model space. The renderer caches one diamond mesh and uses `transformMesh(mesh, x, y, z, rotY, scale)` from `display-list.ts` each frame to get world-space vertices/normals, then draws via `drawMesh` (with optional objectId). So geometry is generated once and reused; only the transform is applied per draw. A **display list** is represented by `DisplayListEntry[]`: each entry has a `kind` (`'static'` | `'skinned'` | `'ui'`) and the right data (mesh + transform for static/UI; mesh + skeleton + boneMap for skinned). See §7 for the full generalized format covering characters, terrain, walls, roofs, UI, and optional UV/texture-ID for paint-on-skin.
 
 ### 1.2 Shaders (WGSL, as implemented)
 
-- **Mesh:** `@location(0)` position, `@location(1)` normal, `@location(2)` texCoord. Uniforms: projection, modelView, lightDir, alpha, fadeColor (fade when .r ≥ 0), hasTexture. Fragment: diffuse + texture or untextured gray.
-- **Fullscreen quad:** NDC positions; fragment solid color (fade). No texture.
-- **Diamond:** Same mesh pipeline, solid color, no texture.
+- **Mesh:** Vertex: position, normal, texCoord. Uniforms: projection, modelView, lightDir, alpha, fadeColor (fade when .r ≥ 0), hasTexture, ambient, diffuseFactor, highlight (vec4), idType/objectId/subObjectId, debugMode. Fragment: dual output — object id (`vec4u`) and color (`vec4f`); diffuse + texture or untextured gray; optional highlight mix.
+- **Fullscreen quad:** NDC positions; fade color; writes zero object id when the ID attachment is bound.
+- **Diamond:** Same mesh pipeline family, solid color, optional object id.
 
 ### 1.3 Next phases (implementation order in §4)
 
 1. ~~WebGPU parity + setViewport + loader texture factory~~ — **done**.
-2. **Object-ID and layered sprites (optional next):** Second pass or alternate pipeline writing object ID per pixel for picking and baking.
-3. **Advanced features:** Sims-style pipeline, terrain, UI effects (below).
+2. ~~Object-ID in the main pass + `readObjectIdAt` + mooshow picking~~ — **done** (single pass, not a separate object-ID pass).
+3. **Holodeck / advanced:** Background layer, terrain, walls, UI (§4 steps 4–8).
+4. **GPU deformation / animation (§5):** Parallel track; not started.
 
 ---
 
@@ -59,7 +60,7 @@ Every pixel has **type** (8 bits), **object id** (32 bits), and **sub-object id*
 - **Reserved types:** `0` = none/background, `1` = character, `2` = object (prop), `3` = wall, `4` = floor, `5` = terrain, `6` = plumb-bob (diamond or custom mesh). Plumb-bob uses the same objectId as the character it hovers over. The plumb-bob shape can be the built-in procedural diamond or a user-supplied mesh (see §6). Extend as we add passes.
 - **Sub-object id semantics:** Keep a **single low-level granular ID** in the buffer: e.g. the mesh index (or draw index) within the object. So for characters, subObjectId is the index of the mesh in the body’s mesh list (0 = first skin, 1 = second, …). For props, it’s the draw group or sprite index. The renderer does not encode dressing, suite, or character in the ID; it only writes (type, objectId, subObjectId). The **application maintains maps** from (type, objectId, subObjectId) up to higher-level identities: e.g. (CHARACTER, bodyIndex, meshIndex) → dressing → suite → character. One granular sub-object id at the GPU, then derive dressing ⇒ suite ⇒ character (and any other hierarchy) via app-side lookups. That keeps the buffer format simple and stable while allowing flexible resolution for UI, paint tools, and selection.
 - **TODO (future):** Character renderer could render which (main) bone each triangle was skinned to into the ID buffer (e.g. via vertex attribute or per-draw bone id), so you get bone-based selection: click on an arm and resolve to the upper-arm bone. Not yet implemented.
-- **Flow:** One pass with **two color attachments** (main framebuffer + object-ID texture) and one depth buffer. The mesh pipeline fragment shader writes both color (location 0) and object ID (location 1, vec4u type/objectId/subObjectId/0). Same depth test and write for both; no second pass. Geometry is submitted once per object; the same draw that writes color also writes ID. For fullscreen overlay (e.g. fade quad), a dual-target quad pipeline writes color and (0,0,0,0) to the ID buffer so the pass always has two attachments when the ID texture exists.
+- **Flow:** One pass with **two color attachments** and one depth buffer. **Attachment 0** is `rgba32uint` (object ID). **Attachment 1** is the surface/swapchain color. The mesh fragment shader outputs `@location(0) objectId: vec4u` and `@location(1) color: vec4f` (type / objectId / subObjectId in the uint target). Same depth test and write for both; no second geometry pass for IDs. Fullscreen fade writes color to attachment 1 and `(0,0,0,0)` to attachment 0 when dual-targeting is active.
 - **API:** `drawMesh(mesh, verts, norms, texture?, objectId?)` and `drawDiamond(..., objectId?)`. When `objectId` is provided, the mesh uniform includes type/objectId/subObjectId and the fragment writes them to the second attachment. When omitted, (0,0,0,0) is written. `readObjectIdAt(x, y)` returns `Promise<{ type, objectId, subObjectId }>`. No separate `beginObjectIdPass()` or `drawMeshObjectId`; one pass, one draw per object.
 - **Layered sprite authoring:** Same ID or a separate “bake” pass used to generate the RGB+alpha+z layers for new objects.
 
@@ -131,14 +132,19 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 
 ## 4. Implementation order
 
+**Holodeck / presentation track** (serial steps; 1–3 complete)
+
 1. ~~WebGPU parity (renderer + texture)~~ — **done**.
 2. ~~setViewport + loader texture factory~~ — **done**.
-3. **Object-ID pass** (optional) for picking and future baking.
+3. ~~Object-ID in main pass + `readObjectIdAt` + app picking~~ — **done** (mooshow uses ids for pick/hover; supports layered-sprite authoring later).
 4. **Background layer:** z-buffered sprites and/or procedural terrain + floor (minimal: grid + height + one tile texture).
 5. **Walls and roofs** (procedural or tiled in shaders).
-6. **Lighting** (ambient + directional in fragment).
-7. **Highlight / selection / feedback** (uniforms + one small overlay pass if needed).
+6. **Lighting** — directional + ambient already in WGSL; expose and tune from mooshow (public setters if missing).
+7. **Highlight / selection / feedback** — highlight uniform exists in shader; wire hover/selected ids from stage and add API on `Renderer` if needed; optional small overlay pass.
 8. **Pie menu** (desaturated bg, feather, shadow) when the app adds a pie UI.
+
+**Parallel track — performance (§5)**  
+Not scheduled inside steps 4–8: **GPU-side deformation** (then optional full GPU animation). Reduces per-frame vertex upload; large win for crowds. Starts only when someone takes §5 as the active task.
 
 ---
 
