@@ -11,7 +11,10 @@
 		let cancelled = false;
 		let stage: MooShowStage | null = null;
 
-		const assetsBaseUrl = base === '' ? '/' : `${base.replace(/\/$/, '')}/`;
+		// SvelteKit serves static files from /data/ (vitamoospace/static/data/). Content index
+		// lists bare filenames (e.g. adult-skeleton.cmx); mooshow resolves them against baseUrl.
+		const pathRoot = (base || '').replace(/\/$/, '');
+		const assetsBaseUrl = `${pathRoot}/data/`;
 
 		(async () => {
 			const el = canvasEl;
@@ -30,7 +33,7 @@
 					stage.destroy();
 					return;
 				}
-				await stage.loadContentIndex('data/content.json', (msg) => {
+				await stage.loadContentIndex('content.json', (msg) => {
 					if (!cancelled) loadStatus = msg;
 				});
 				if (cancelled) {
