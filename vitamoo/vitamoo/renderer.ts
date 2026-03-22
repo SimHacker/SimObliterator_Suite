@@ -63,6 +63,8 @@ struct Uniforms {
     ambient: f32,
     diffuseFactor: f32,
     highlight: vec4f,
+    plumbBobUiAmbient: f32,
+    plumbBobUiDiffuse: f32,
 }
 struct PickDebugUniforms {
     debugMode: u32,
@@ -155,7 +157,12 @@ fn fragmentMain(input: VertexOutput) -> MeshPickColorOutput {
     }
     // --- end debugMode; then solid vertex color, then default shaded ---
     if (u.solidColorMode != 0u) {
-        result.color = vec4f(u.fadeColor.xyz, u.alpha);
+        let n = normalize(input.normal);
+        let L = normalize(u.lightDir);
+        let diffuse = max(dot(n, L), 0.0);
+        let raw = u.plumbBobUiAmbient + u.plumbBobUiDiffuse * diffuse;
+        let light = clamp(raw, 0.0, 1.0);
+        result.color = vec4f(u.fadeColor.xyz * light, u.alpha);
         return result;
     }
     let n = normalize(input.normal);
@@ -211,7 +218,12 @@ fn fragmentMainColorOnly(input: VertexOutput) -> @location(0) vec4f {
         return vec4f(vec3f(0.85, 0.25, 0.25) * light, u.alpha);
     }
     if (u.solidColorMode != 0u) {
-        return vec4f(u.fadeColor.xyz, u.alpha);
+        let n = normalize(input.normal);
+        let L = normalize(u.lightDir);
+        let diffuse = max(dot(n, L), 0.0);
+        let raw = u.plumbBobUiAmbient + u.plumbBobUiDiffuse * diffuse;
+        let light = clamp(raw, 0.0, 1.0);
+        return vec4f(u.fadeColor.xyz * light, u.alpha);
     }
     let n = normalize(input.normal);
     let L = normalize(u.lightDir);
@@ -336,6 +348,8 @@ const U_MESH_SOLID = 164;
 const U_MESH_AMBIENT = 168;
 const U_MESH_DIFFUSE = 172;
 const U_MESH_HIGHLIGHT = 176;
+const U_PLUMB_BOB_UI_AMBIENT = 192;
+const U_PLUMB_BOB_UI_DIFFUSE = 196;
 /** Pick buffer `idType` (`PickDebugUniforms`, binding 3). Use values outside mesh `debugMode` 0..6 for extra safety. */
 export const ObjectIdType = {
     NONE: 0,
@@ -408,6 +422,9 @@ export class Renderer {
     private fadeColor = new Float32Array([FADE_SENTINEL, FADE_SENTINEL, FADE_SENTINEL]);
     private ambient = 0.25;
     private diffuseFactor = 0.75;
+    /** Solid/plumb-bob pass only: high floor so UI reads in dark rooms; uses same `lightDir` as characters. */
+    private plumbBobUiAmbient = 0.9;
+    private plumbBobUiDiffuse = 0.14;
     private highlight = new Float32Array([0, 0, 0, 0]);
     private cullingEnabled = true;
 
@@ -418,7 +435,7 @@ export class Renderer {
     private plumbBobMeshes: MeshData[] | null = null;
     /** Scale multiplier for plumb-bob (applied to size in drawDiamond). Default 1. */
     private plumbBobScale = 1;
-    /** True only while `drawDiamond` invokes `drawMesh` — solid vertex color must not infer from fadeColor elsewhere. */
+    /** True only while `drawDiamond` calls `drawMesh` — fadeColor is lit tint; elsewhere fadeColor stays sentinel. */
     private meshSolidVertexPass = false;
 
     private currentEncoder: GPUCommandEncoder | null = null;
@@ -824,6 +841,15 @@ export class Renderer {
         this.plumbBobScale = scale;
     }
 
+    /**
+     * Plumb-bob / solid-mesh shading uses the same `lightDir` as `setCamera` (Sims-style key) but its own
+     * ambient and diffuse scale so the diamond stays bright while keeping a little directional shaping.
+     */
+    setPlumbBobUiLighting(ambient: number, diffuse: number): void {
+        this.plumbBobUiAmbient = Math.max(0, ambient);
+        this.plumbBobUiDiffuse = Math.max(0, diffuse);
+    }
+
     endFrame(): void {
         this._endFrame();
     }
@@ -929,6 +955,8 @@ export class Renderer {
         view.setFloat32(U_MESH_HIGHLIGHT + 4, this.highlight[1], true);
         view.setFloat32(U_MESH_HIGHLIGHT + 8, this.highlight[2], true);
         view.setFloat32(U_MESH_HIGHLIGHT + 12, this.highlight[3], true);
+        view.setFloat32(U_PLUMB_BOB_UI_AMBIENT, this.plumbBobUiAmbient, true);
+        view.setFloat32(U_PLUMB_BOB_UI_DIFFUSE, this.plumbBobUiDiffuse, true);
         const debugModeU32 = (this.debugSliceMode ?? 0) >>> 0;
         if (debugModeU32 !== 0 && !Renderer._loggedDebugSlice) {
             Renderer._loggedDebugSlice = true;
@@ -952,7 +980,7 @@ export class Renderer {
             });
         }
         // Fresh uniform buffers per draw: all queue.writeBuffer calls for a frame are ordered before
-        // queue.submit(encoder); a single shared buffer would leave every draw seeing the last write (plumb-bob solid green).
+        // queue.submit(encoder); a single shared buffer would leave every draw seeing the last write.
         const meshUniformBuffer = this.device.createBuffer({
             size: UNIFORM_SIZE,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,

@@ -30,7 +30,7 @@ export function createDiamondMesh(
         const a = eq[i];
         const b = eq[next];
         const triTop = [a, b, top];
-        const triBot = [a, b, bot];
+        const triBot = [b, a, bot];
         for (const tri of [triTop, triBot]) {
             const n = normalFromTri(tri[0], tri[1], tri[2]);
             for (let j = 0; j < 3; j++) {

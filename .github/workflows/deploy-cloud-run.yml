@@ -1,8 +1,7 @@
 name: Build & Deploy to Cloud Run
 
-# Triggered manually. All GCS/Cloud Run config lives in your fork's secrets.
-# The origin repo has no GCP credentials — this only works on forks that
-# configure the secrets listed below.
+# Manually triggered only. Deploy runs only when repository secret CLOUD_RUN_DEPLOY is set
+# (any non-empty value) and GCP secrets are present; otherwise the gate job exits without deploy.
 on:
   workflow_dispatch:
     inputs:
@@ -15,23 +14,46 @@ on:
         default: 'vitamoospace'
         required: false
 
-# Required repository secrets (set in your fork's Settings > Secrets):
+# Repository secrets (Settings → Secrets and variables → Actions):
 #
-#   GCP_PROJECT_ID        — your GCP project ID
-#   GCP_SA_KEY            — service account JSON key with permissions:
-#                           - Artifact Registry Writer
-#                           - Cloud Run Admin
-#                           - Service Account User
-#   GCP_REGION            — (optional) default region override
+#   CLOUD_RUN_DEPLOY     — REQUIRED to run deploy: any non-empty value opts in (forks without
+#                          this secret get a successful workflow that skips deploy).
 #
-# Optional secrets:
-#   BASE_PATH             — URL base path (empty for custom domain)
+#   GCP_PROJECT_ID       — required when CLOUD_RUN_DEPLOY is set
+#   GCP_SA_KEY           — service account JSON when CLOUD_RUN_DEPLOY is set:
+#                          Artifact Registry Writer, Cloud Run Admin, Service Account User
+#
+#   GCP_REGION           — optional default region override
+#   BASE_PATH            — optional URL base path (empty for custom domain)
 
 permissions:
   contents: read
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        run: |
+          set -e
+          ENABLE="${{ secrets.CLOUD_RUN_DEPLOY != '' }}"
+          HAS_GCP="${{ secrets.GCP_SA_KEY != '' && secrets.GCP_PROJECT_ID != '' }}"
+          if [ "$ENABLE" != "true" ]; then
+            echo "::notice::Cloud Run deploy skipped: add repository secret CLOUD_RUN_DEPLOY (any value) to enable deploy on this repo."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HAS_GCP" != "true" ]; then
+            echo "::error::CLOUD_RUN_DEPLOY is set but GCP_PROJECT_ID or GCP_SA_KEY is missing."
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
   build-and-deploy:
+    needs: gate
+    if: needs.gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

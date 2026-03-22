@@ -42,6 +42,13 @@ export interface StageConfig {
     plumbBobUrl?: string;
     /** Scale multiplier for the plumb-bob. Default 1. */
     plumbBobScale?: number;
+    /** RGB tint for the plumb-bob (simulation / UI). Default Sims-style green. */
+    plumbBobColor?: { r: number; g: number; b: number };
+    /**
+     * Plumb-bob uses the same light direction as characters but its own ambient/diffuse so it stays readable.
+     * Defaults: ambient 0.9, diffuse 0.14 (clamped to 1 in the shader).
+     */
+    plumbBobUiLighting?: { ambient: number; diffuse: number };
 }
 
 export class MooShowStage {
@@ -70,6 +77,9 @@ export class MooShowStage {
     private _plumbBobScale: number;
     private _plumbBobThrobStart = 0;
     private _plumbBobSelectionTime = 0;
+    private _plumbBobColor: { r: number; g: number; b: number };
+    private _plumbBobUiAmbient: number;
+    private _plumbBobUiDiffuse: number;
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
@@ -79,6 +89,10 @@ export class MooShowStage {
         this.sound = new SoundEngine();
         this._plumbBobUrl = config.plumbBobUrl;
         this._plumbBobScale = config.plumbBobScale ?? 1;
+        this._plumbBobColor = config.plumbBobColor ?? { r: 0.2, g: 1.0, b: 0.2 };
+        const ui = config.plumbBobUiLighting;
+        this._plumbBobUiAmbient = ui?.ambient ?? 0.9;
+        this._plumbBobUiDiffuse = ui?.diffuse ?? 0.14;
 
         this._initRenderer();
         this._bindCanvasEvents();
@@ -105,6 +119,7 @@ export class MooShowStage {
                     }
                 }
                 r.setPlumbBobScale(this._plumbBobScale);
+                r.setPlumbBobUiLighting(this._plumbBobUiAmbient, this._plumbBobUiDiffuse);
                 const ds = new URLSearchParams(window.location.search).get('debugSlice');
                 if (ds !== null) {
                     const m = parseInt(ds, 10);
@@ -145,6 +160,25 @@ export class MooShowStage {
         this._plumbBobScale = scale;
         const r = await this._getRenderer();
         if (r) r.setPlumbBobScale(scale);
+    }
+
+    /** RGB tint for the plumb-bob from simulation or UI (applied next frame). */
+    setPlumbBobColor(r: number, g: number, b: number): void {
+        this._plumbBobColor = { r, g, b };
+    }
+
+    get plumbBobColor(): { r: number; g: number; b: number } {
+        return { ...this._plumbBobColor };
+    }
+
+    /**
+     * Bright UI-style plumb-bob shading: same light direction as the scene (`setCamera`), separate ambient/diffuse.
+     */
+    async setPlumbBobUiLighting(ambient: number, diffuse: number): Promise<void> {
+        this._plumbBobUiAmbient = ambient;
+        this._plumbBobUiDiffuse = diffuse;
+        const ren = await this._getRenderer();
+        if (ren) ren.setPlumbBobUiLighting(ambient, diffuse);
     }
     get activeScene(): string | null { return this._activeScene; }
     get paused(): boolean { return this._paused; }
@@ -520,8 +554,9 @@ export class MooShowStage {
                 const isSelected = bi === this._selectedActor;
                 const yOffset = (1.5 + bob) * (isSelected ? riseFactor : 1);
                 const size = basePlumbSize * (isSelected ? throbScale : 1);
+                const c = this._plumbBobColor;
                 renderer.drawDiamond(
-                    rx + body.x, hy + yOffset, rz + body.z, size, plumbRot, 0.2, 1.0, 0.2, 0.9,
+                    rx + body.x, hy + yOffset, rz + body.z, size, plumbRot, c.r, c.g, c.b, 0.9,
                     { type: ObjectIdType.PLUMB_BOB, objectId: bi },
                 );
                 this.hooks.onPlumbBobChange?.(bi, true);
