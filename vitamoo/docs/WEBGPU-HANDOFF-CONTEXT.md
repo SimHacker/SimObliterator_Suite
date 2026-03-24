@@ -2,6 +2,8 @@
 
 **Purpose:** Handoff doc for the vitamoo WebGPU **`Renderer`**: a framework meant to support broader Sims content and plug-ins (UI, visualization, editors); character animation is the first integrated slice. Use this file to iterate on the next pass.
 
+**Deployment:** **vitamoospace** ships to **GitHub Pages** via `.github/workflows/pages.yml` when `VITAMOOSPACE_PAGES_URL` is set on the repository. The live demo is the current reference for “what shipped.”
+
 ---
 
 ## Canonical design
@@ -23,6 +25,7 @@
 | Textures (`loadTexture`, `getTextureFactory`, mooshow loader) | Done |
 | Object-ID buffer + `readObjectIdAt`; mooshow picking | Done |
 | CPU animation | `Practice.tick`, `updateTransforms`, `deformMesh` in JS; deformed verts uploaded every frame |
+| Console noise (renderer / texture / deform / pick) | **Done:** gated behind `Renderer.create(canvas, { verbose: true })`, `StageConfig.verbose`, or `?vitamooVerbose=1` (default quiet) |
 | GPU skeletal deformation / compute | Not started (see §5) |
 | Holodeck background (terrain, sprites, walls) | Not started (§4 steps 4–5) |
 | Highlight / selection tint in app | WGSL has `highlight` + `ambient` uniforms; mooshow does not expose setters yet (defaults only) |
@@ -43,12 +46,23 @@
 
 | File | Role |
 |------|------|
-| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas)` → `Promise<Renderer \| null>`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual color attachments: **attachment 0** `rgba32uint` (object id), **attachment 1** surface color. |
-| `vitamoo/vitamoo/texture.ts` | `parseBMP`; `loadTexture(device, queue, url)` → `TextureHandle` (`GPUTexture`). |
+| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas, options?)` — optional `{ verbose?: boolean }`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual attachments: three `r32uint` pick layers + swapchain color (see README). |
+| `vitamoo/vitamoo/texture.ts` | `parseBMP`; `loadTexture(device, queue, url, verbose?)` → `TextureHandle` (`GPUTexture`). |
 
-**mooshow:** `Renderer.create` → `setViewport`, `setTextureFactory`. Each frame: clear/fade → `setCamera` → per body `deformMesh` then `drawMesh` with `ObjectIdType` / body index / mesh index → plumb-bob draws → `endFrame`. Picking: `readObjectIdAt` (character and plumb-bob types). `setDebugSlice` wired from stage config / URL.
+**mooshow:** `Renderer.create(canvas, { verbose })` → `setViewport`, `setTextureFactory`. Each frame: clear/fade → `setCamera` → per body `deformMesh(..., { verbose })` then `drawMesh` with `ObjectIdType` / body index / mesh index → plumb-bob draws → `endFrame`. Picking: `readObjectIdAt` (character and plumb-bob types). `setDebugSlice` wired from stage config / URL (`?debugSlice=`).
 
 **Object-ID layout:** Matches §2.3 of the design doc: `vec4u(type, objectId, subObjectId, 0)` in the uint attachment (see `ObjectIdType` in vitamoo exports).
+
+---
+
+## Pre–§5 checklist (before GPU deformation work)
+
+Use this when starting the **Performance track** so the CPU and GPU paths stay aligned.
+
+1. **Contract:** Document per-frame inputs: bone world transforms after `updateTransforms` (same data `deformMesh` uses). Outputs: deformed positions/normals per vertex, bit-exact with CPU path for regression tests (or document acceptable tolerances).
+2. **Integration:** One compute pass (or dispatch) before the existing main render pass; same depth buffer and object-ID attachments; `drawMesh` reads from a GPU vertex buffer instead of a `Float32Array` from JS (or a hybrid during bring-up).
+3. **Fallback:** If `device` lacks required limits or compute fails, keep the current `deformMesh` + `drawMesh` path (feature-detect in `Renderer` or stage).
+4. **Profiling:** Measure frame time and upload size before/after; goal is fewer bytes across the CPU–GPU boundary per character.
 
 ---
 
@@ -65,9 +79,8 @@ Pick one track and ship a vertical slice.
 1. **GPU deformation (Option A):** Keep `Practice` on CPU; upload bone matrices each frame; compute shader (or staged compute) implements vitamoo’s Phase 0 / Phase 1 / blend model; draw from GPU-resident deformed buffer instead of streaming full vertex arrays from JS.  
 2. **Option B** (later): move animation evaluation to GPU.
 
-**Small polish**  
-- Remove or gate verbose `readObjectIdAt` logging in `renderer.ts` if it is still noisy in production.  
-- Optional: bone-level id in the object-ID buffer (§2.3 TODO) for mesh-part picking.
+**Optional polish**  
+- Bone-level id in the object-ID buffer (§2.3 TODO in `WEBGPU-RENDERER-DESIGN.md`) for mesh-part picking.
 
 ---
 

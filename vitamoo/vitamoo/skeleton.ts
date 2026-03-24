@@ -104,10 +104,16 @@ function vec3Normalize(v: Vec3): Vec3 {
 //   destVert = lerp(destVert_by_boneA, blendVert_by_boneB, weight)
 const _deformLogged = new Set<string>();
 
+export interface DeformMeshOptions {
+    /** When true, log once per mesh name with bound/blend stats (default false). */
+    verbose?: boolean;
+}
+
 export function deformMesh(
     mesh: MeshData,
     bones: Bone[],
     boneMap: Map<string, Bone>,
+    options?: DeformMeshOptions,
 ): { vertices: Vec3[]; normals: Vec3[] } {
     const totalVerts = mesh.vertices.length;
     const boundCount = mesh.uvs.length; // bound vertices = UV count
@@ -199,10 +205,11 @@ export function deformMesh(
         }
     }
 
-    // Log once per mesh name to avoid flooding the console at 60fps
-    if (!_deformLogged.has(mesh.name)) {
-        _deformLogged.add(mesh.name);
-        console.log(`[deformMesh] "${mesh.name}" bound=${transformedBound} blend=${transformedBlend} blended=${blendCount}/${mesh.blendBindings.length} total=${totalVerts} missing=[${missingBones}]`);
+    if (options?.verbose) {
+        if (!_deformLogged.has(mesh.name)) {
+            _deformLogged.add(mesh.name);
+            console.log(`[deformMesh] "${mesh.name}" bound=${transformedBound} blend=${transformedBlend} blended=${blendCount}/${mesh.blendBindings.length} total=${totalVerts} missing=[${missingBones}]`);
+        }
     }
 
     return { vertices: outVerts, normals: outNorms };

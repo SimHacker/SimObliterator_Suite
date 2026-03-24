@@ -377,6 +377,15 @@ export type SubObjectId = (typeof SubObjectId)[keyof typeof SubObjectId];
 const DEBUG_PASS_LOGS = 2;
 const DEBUG_UNIFORM_LOGS = 8;
 
+/** Options for {@link Renderer.create}. */
+export interface RendererCreateOptions {
+    /**
+     * When true, log pipeline setup, pass layout, per-mesh first draw, uniforms, pick readbacks, and texture success.
+     * Default false for published builds. mooshow also enables via `StageConfig.verbose` or `?vitamooVerbose=1`.
+     */
+    verbose?: boolean;
+}
+
 /** Three r32uint MRT layers (id type, object id, sub-object id) plus swapchain color; see device.limits.maxColorAttachments (minimum 4). */
 type PickLayerTextures = {
     idType: GPUTexture;
@@ -443,12 +452,19 @@ export class Renderer {
     private currentTexture: GPUTexture | null = null;
     private buffersToDestroy: GPUBuffer[] = [];
 
-    private constructor(private canvas: HTMLCanvasElement) {}
+    private constructor(
+        private canvas: HTMLCanvasElement,
+        private readonly options: RendererCreateOptions = {},
+    ) {}
 
-    static async create(canvas: HTMLCanvasElement): Promise<Renderer> {
-        const r = new Renderer(canvas);
+    static async create(canvas: HTMLCanvasElement, options?: RendererCreateOptions): Promise<Renderer> {
+        const r = new Renderer(canvas, options ?? {});
         await r._init();
         return r;
+    }
+
+    private get verbose(): boolean {
+        return this.options.verbose === true;
     }
 
     private async _init(): Promise<void> {
@@ -541,11 +557,13 @@ export class Renderer {
                 { format: this.format },
             ],
         };
-        console.log(
-            '[renderer] mesh pipeline targets: [0-2]=r32uint(idType,objectId,subObjectId) [3]=',
-            this.format,
-            '(color)',
-        );
+        if (this.verbose) {
+            console.log(
+                '[renderer] mesh pipeline targets: [0-2]=r32uint(idType,objectId,subObjectId) [3]=',
+                this.format,
+                '(color)',
+            );
+        }
         const meshDepthStencil: GPUDepthStencilState = {
             format: 'depth24plus',
             depthWriteEnabled: true,
@@ -668,8 +686,9 @@ export class Renderer {
     }
 
     getTextureFactory(): { createTextureFromUrl(url: string): Promise<TextureHandle> } {
+        const v = this.verbose;
         return {
-            createTextureFromUrl: (url: string) => loadTexture(this.device, this.queue, url),
+            createTextureFromUrl: (url: string) => loadTexture(this.device, this.queue, url, v),
         };
     }
 
@@ -751,7 +770,7 @@ export class Renderer {
                 depthStoreOp: 'store',
             } : undefined,
         };
-        if (Renderer._passLogCount < DEBUG_PASS_LOGS) {
+        if (this.verbose && Renderer._passLogCount < DEBUG_PASS_LOGS) {
             Renderer._passLogCount++;
             const n = colorAttachments.length;
             const objSize = this.pickTextures
@@ -892,7 +911,7 @@ export class Renderer {
         }
         const texToBind = textureValid ? texture! : null;
 
-        if (!Renderer.loggedMeshes.has(mesh.name)) {
+        if (this.verbose && !Renderer.loggedMeshes.has(mesh.name)) {
             Renderer.loggedMeshes.add(mesh.name);
             const maxIdx = vertices.length - 1;
             const badIndices = indexData.filter((i) => i < 0 || i > maxIdx);
@@ -930,7 +949,7 @@ export class Renderer {
         const fadeB = useSolidColor ? this.fadeColor[2] : FADE_SENTINEL;
         const hasTexU32 = texToBind ? 1 : 0;
         const solidColorU32 = useSolidColor ? 1 : 0;
-        if (Renderer._uniformLogCount < DEBUG_UNIFORM_LOGS && texToBind != null) {
+        if (this.verbose && Renderer._uniformLogCount < DEBUG_UNIFORM_LOGS && texToBind != null) {
             Renderer._uniformLogCount++;
             const useDualForLog = this.pickTextures != null;
             console.log('[renderer] drawMesh uniform (textured)', {
@@ -958,11 +977,11 @@ export class Renderer {
         view.setFloat32(U_PLUMB_BOB_UI_AMBIENT, this.plumbBobUiAmbient, true);
         view.setFloat32(U_PLUMB_BOB_UI_DIFFUSE, this.plumbBobUiDiffuse, true);
         const debugModeU32 = (this.debugSliceMode ?? 0) >>> 0;
-        if (debugModeU32 !== 0 && !Renderer._loggedDebugSlice) {
+        if (this.verbose && debugModeU32 !== 0 && !Renderer._loggedDebugSlice) {
             Renderer._loggedDebugSlice = true;
             console.log('[renderer] debugSlice', debugModeU32, meshFragmentDebugModeLabel(debugModeU32));
         }
-        if (Renderer._uniformLogCount <= 1 && texToBind != null) {
+        if (this.verbose && Renderer._uniformLogCount <= 1 && texToBind != null) {
             const u8 = new Uint8Array(uniformData);
             const fadeHex = Array.from(u8.slice(U_MESH_FADE, U_MESH_HAS_TEX + 4)).map((b) =>
                 b.toString(16).padStart(2, '0'),
@@ -1103,7 +1122,7 @@ export class Renderer {
         const type = dv.getUint32(0, true);
         const objectId = dv.getUint32(bytesPerRow, true);
         const subObjectId = dv.getUint32(bytesPerRow * 2, true);
-        if (Renderer._readObjectIdLogCount < Renderer.DEBUG_READ_OBJECT_ID_LOGS) {
+        if (this.verbose && Renderer._readObjectIdLogCount < Renderer.DEBUG_READ_OBJECT_ID_LOGS) {
             Renderer._readObjectIdLogCount++;
             const raw = new Uint8Array(mapped);
             const hex = Array.from(raw.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ');

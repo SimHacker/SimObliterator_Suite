@@ -171,12 +171,13 @@ function decodeRLE8(
 
 // Load a texture from a file. Detects format by extension.
 // BMP: parseBMP (8/24/32 bpp, BI_RGB + BI_RLE8) → ImageData → createImageBitmap → copyExternalImageToTexture.
-//      Success: console "[texture] loaded <url> WxH". Verify in-render with ?debugSlice=1 (UV as color) or debugSlice=0 (normal).
+//      Success log when verbose: "[texture] loaded <url> WxH". Verify in-render with ?debugSlice=1 (UV as color) or debugSlice=0 (normal).
 // PNG/JPG: browser decode → createImageBitmap → copyExternalImageToTexture.
 export async function loadTexture(
     device: GPUDevice,
     queue: GPUQueue,
     url: string,
+    verbose = false,
 ): Promise<TextureHandle> {
     const ext = url.split('.').pop()?.toLowerCase() ?? '';
     let bitmap: ImageBitmap;
@@ -214,6 +215,6 @@ export async function loadTexture(
         [w, h, 1],
     );
     bitmap.close();
-    console.log('[texture] loaded', url, `${w}x${h}`);
+    if (verbose) console.log('[texture] loaded', url, `${w}x${h}`);
     return tex;
 }

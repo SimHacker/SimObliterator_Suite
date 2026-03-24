@@ -49,14 +49,14 @@ flowchart TB
 - Build and update skeletons: `buildSkeleton`, `updateTransforms`, `findBone`, `findRoot`.
 - Deform meshes from skeleton state: `deformMesh`.
 - Animation: `Practice` (skill + skeleton), tick and drive transforms.
-- Optional WebGPU: `Renderer.create(canvas)` (WGSL mesh pipeline, depth, object-ID attachment), `loadTexture(device, queue, url)`, `parseBMP`.
+- Optional WebGPU: `Renderer.create(canvas, options?)` with optional `{ verbose?: boolean }` (WGSL mesh pipeline, depth, object-ID attachments), `loadTexture(device, queue, url, verbose?)`, `parseBMP`.
 
 ### Public API (from `vitamoo`)
 
 - **Types:** `Vec2`, `Vec3`, `Quat`, `Bone`, `SkeletonData`, `MeshData`, `SuitData`, `SkillData`, `MotionData`, `BoneData`, `SkinData`, `BoneBinding`, `BlendBinding`, `Face`, `CMXFile`.
 - **Parse/write:** `parseCMX`, `parseSKN`, `parseBCF`, `parseBMF`, `parseCFP`, `writeCMX`, `writeSKN`, `writeReport`, `writeBCF`, `writeBMF`, `writeCFP`.
-- **Skeleton:** `buildSkeleton`, `findRoot`, `findBone`, `updateTransforms`, `deformMesh`.
-- **Renderer:** `Renderer` (`Renderer.create`, `drawMesh`, `drawDiamond`, `readObjectIdAt`, `endFrame`, …). Types: `ObjectIdType`, `SubObjectId`.
+- **Skeleton:** `buildSkeleton`, `findRoot`, `findBone`, `updateTransforms`, `deformMesh` (optional `DeformMeshOptions`: `{ verbose?: boolean }`).
+- **Renderer:** `Renderer` (`Renderer.create`, `drawMesh`, `drawDiamond`, `readObjectIdAt`, `endFrame`, …). Types: `ObjectIdType`, `SubObjectId`, `RendererCreateOptions`.
 - **I/O:** `DataReader`, `TextReader`, `BinaryReader`, `BinaryWriter`, `buildDeltaTable`, `decompressFloats`, `compressFloats`.
 - **Texture:** `parseBMP`, `loadTexture` (returns `GPUTexture` via `TextureHandle`).
 - **Display / assets:** `createDiamondMesh`, `transformMesh`, `loadGltfMeshes`, display-list types (`DisplayListEntry`, …).
@@ -93,8 +93,13 @@ const stage = createMooShowStage({
   canvas: document.querySelector('canvas'),
   hooks: { onSceneChange: (name) => { … }, onKeyAction: (action, value) => { … } },
   assetsBaseUrl: '/data/',   // base URL for content index and assets
+  // verbose: true,  // optional: log renderer, texture, deformMesh, pick (also ?vitamooVerbose=1 in browser)
 });
 ```
+
+**Config notes:**
+
+- **`verbose`** — When `true`, enables detailed `console` output from the WebGPU renderer, texture loads, first-per-mesh `deformMesh` stats, and pick resolution. Default `false`. In the browser, `?vitamooVerbose=1` turns it on unless `verbose` is set explicitly on the config object.
 
 **Main methods:**
 

@@ -49,6 +49,11 @@ export interface StageConfig {
      * Defaults: ambient 0.9, diffuse 0.14 (clamped to 1 in the shader).
      */
     plumbBobUiLighting?: { ambient: number; diffuse: number };
+    /**
+     * Verbose console logging for renderer, texture loads, deformMesh stats, and pick resolution.
+     * Default false. Also enable in the browser with URL query `?vitamooVerbose=1` (overridden if this is set).
+     */
+    verbose?: boolean;
 }
 
 export class MooShowStage {
@@ -80,9 +85,14 @@ export class MooShowStage {
     private _plumbBobColor: { r: number; g: number; b: number };
     private _plumbBobUiAmbient: number;
     private _plumbBobUiDiffuse: number;
+    private readonly _verbose: boolean;
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
+        const urlVerbose =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('vitamooVerbose') === '1';
+        this._verbose = config.verbose ?? urlVerbose;
         this.hooks = { ...defaultHooks, ...config.hooks };
         this.loader = new ContentLoader(config.assetsBaseUrl ?? '');
         this.spin = new SpinController();
@@ -102,7 +112,7 @@ export class MooShowStage {
         this.canvas.width = this.canvas.clientWidth;
         this.canvas.height = this.canvas.clientHeight;
         const plumbBobUrl = this._plumbBobUrl;
-        this._renderer = Renderer.create(this.canvas).catch((e) => {
+        this._renderer = Renderer.create(this.canvas, { verbose: this._verbose }).catch((e) => {
             console.error('WebGPU init failed:', e);
             return null;
         }).then(async (r) => {
@@ -478,7 +488,9 @@ export class MooShowStage {
                 try {
                     let verts: any[], norms: any[];
                     if (body.skeleton) {
-                        const deformed = deformMesh(mesh, body.skeleton, boneMap);
+                        const deformed = deformMesh(mesh, body.skeleton, boneMap, {
+                            verbose: this._verbose,
+                        });
                         verts = deformed.vertices;
                         norms = deformed.normals;
                     } else {
@@ -606,22 +618,24 @@ export class MooShowStage {
                     const bufferY = localY * scaleY;
                     const { type, objectId, subObjectId } = await renderer.readObjectIdAt(bufferX, bufferY);
                     const picked = (type === ObjectIdType.CHARACTER || type === ObjectIdType.PLUMB_BOB) ? objectId : -1;
-                    console.log('[stage] pick', {
-                        type,
-                        objectId,
-                        subObjectId,
-                        picked,
-                        character: ObjectIdType.CHARACTER,
-                        plumbBob: ObjectIdType.PLUMB_BOB,
-                        action: picked >= 0 ? 'selectActor' : (this._bodies.length > 1 ? 'clearSelection' : 'miss'),
-                    });
-                    if (_stagePickLogCount < DEBUG_STAGE_PICK_LOGS) {
-                        _stagePickLogCount++;
-                        console.log('[stage] mousedown pick detail', {
-                            rectW: rect.width, rectH: rect.height,
-                            canvasW: this.canvas.width, canvasH: this.canvas.height,
-                            localX, localY, scaleX, scaleY, bufferX, bufferY,
+                    if (this._verbose) {
+                        console.log('[stage] pick', {
+                            type,
+                            objectId,
+                            subObjectId,
+                            picked,
+                            character: ObjectIdType.CHARACTER,
+                            plumbBob: ObjectIdType.PLUMB_BOB,
+                            action: picked >= 0 ? 'selectActor' : (this._bodies.length > 1 ? 'clearSelection' : 'miss'),
                         });
+                        if (_stagePickLogCount < DEBUG_STAGE_PICK_LOGS) {
+                            _stagePickLogCount++;
+                            console.log('[stage] mousedown pick detail', {
+                                rectW: rect.width, rectH: rect.height,
+                                canvasW: this.canvas.width, canvasH: this.canvas.height,
+                                localX, localY, scaleX, scaleY, bufferX, bufferY,
+                            });
+                        }
                     }
                     if (picked >= 0) {
                         this.selectActor(picked);

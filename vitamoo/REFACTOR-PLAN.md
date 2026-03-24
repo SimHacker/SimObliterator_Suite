@@ -9,11 +9,11 @@
 | **2** Rendering and hooks | Done | Hooks (onPick, onHover, onSelectionChange, onHighlight, onPlumbBobChange, etc.), picking, SpinController, SoundEngine. |
 | **3** VitaMooSpace.svelte | Done | Single full-page component, scene/actor/character/animation controls, loads `/data/content.json`, api/health placeholder. |
 | **4** GitHub Pages | Done | `.github/workflows/pages.yml` builds vitamoo → mooshow → vitamoospace and deploys `vitamoospace/build`. Deploy runs only when `VITAMOOSPACE_PAGES_URL` is set (variable or secret) on that repository. |
-| **5** Cleanup and parity | Partial | Legacy standalone `demo/` removed from the tree (recoverable from git history). Optional parity write-up and monorepo migration notes still open. |
+| **5** Cleanup and parity | Done | Legacy standalone `demo/` removed. Verbose logging gated (`Renderer.create` / `StageConfig.verbose` / `?vitamooVerbose=1`). `vitamoospace/.gitignore` ignores `.svelte-kit` and `node_modules`. Optional: parity write-up and monorepo migration notes for contributors who want them. |
 
-Definition of Done: items 1–4 are met. Item 5: demo removal done; parity doc and migration notes remain optional.
+Definition of Done: items 1–5 are met for shipping layers (core, mooshow, vitamoospace, Pages, quiet default console).
 
-**Beyond Phase 5:** WebGPU renderer (see DOCUMENTATION.md §6 Plan for mooshow): object-ID rendering, RGB+alpha+z layered sprites from 3D (for object creation), and one reusable pipeline for holodeck runtime (pre-rendered z-buffered background + real-time characters), Sims object creation tools, and save file viewing/editing.
+**Beyond Phase 5:** Holodeck (§4 in `docs/WEBGPU-RENDERER-DESIGN.md`) and **GPU skeletal deformation** (§5, parallel track). See `docs/WEBGPU-HANDOFF-CONTEXT.md` for current status and pre–§5 checklist. Further-out: RGB+alpha+z layered sprites from 3D for object tooling, save file viewing/editing.
 
 ---
 

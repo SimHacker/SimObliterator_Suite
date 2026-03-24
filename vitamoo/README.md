@@ -26,6 +26,16 @@ pnpm --filter vitamoospace run preview
 
 Open the preview URL (e.g. `http://localhost:4173/`) for the Spin the Sims demo.
 
+## Development logging
+
+By default the stack stays **quiet** in the browser console. To debug WebGPU passes, texture loads, mesh deformation stats, and picking:
+
+- Add **`?vitamooVerbose=1`** to the page URL, or
+- Pass **`verbose: true`** to **`createMooShowStage({ … })`**, or
+- Call **`Renderer.create(canvas, { verbose: true })`** when embedding `vitamoo` without mooshow.
+
+Shader display modes still use **`?debugSlice=0`** … **`6`** (see Default controls below). Warnings (e.g. failed texture load) are not suppressed.
+
 ## Use only what you need
 
 - **Data/tooling only:** depend on `vitamoo` for parsing and skeleton/mesh/animation logic; bring your own renderer.
