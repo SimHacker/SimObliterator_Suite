@@ -42,7 +42,7 @@ Shader display modes still use **`?debugSlice=0`** … **`6`** (see Default cont
 - **Browser viewer with your UI:** depend on `mooshow`; create a stage, load a content index, wire hooks to your components.
 - **Full demo:** use or fork `vitamoospace`; swap assets and content index to rebrand.
 
-See **DOCUMENTATION.md** in this directory for full API and layer boundaries, data formats, and how to extend or build on top.
+See **DOCUMENTATION.md** in this directory for full API and layer boundaries, data formats, and how to extend or build on top. **WebGPU renderer:** **[docs/README.md](docs/README.md)** (spec, status, GPU-deformation checklist).
 
 ---
 

@@ -1,23 +1,25 @@
-# WebGPU renderer — context and next pass
+# WebGPU renderer — status and roadmap
 
-**Purpose:** Handoff doc for the vitamoo WebGPU **`Renderer`**: a framework meant to support broader Sims content and plug-ins (UI, visualization, editors); character animation is the first integrated slice. Use this file to iterate on the next pass.
+**Role:** Living snapshot of the vitamoo WebGPU **`Renderer`**: what is shipped, what is next, and where to read the full specification. The **`Renderer`** is a framework for Sims-era and adjacent content (UI, tooling, editors); **skinned characters** are the first integrated slice.
 
-**Deployment:** **vitamoospace** ships to **GitHub Pages** via `.github/workflows/pages.yml` when `VITAMOOSPACE_PAGES_URL` is set on the repository. The live demo is the current reference for “what shipped.”
+**Deployment:** **vitamoospace** ships to **GitHub Pages** via `.github/workflows/pages.yml` when `VITAMOOSPACE_PAGES_URL` is set on the repository. The live demo is the reference for what is deployed.
 
 ---
 
-## Canonical design
+## Specification (single source of truth)
 
-**Single source of truth:** `vitamoo/docs/WEBGPU-RENDERER-DESIGN.md`
+**[webgpu-renderer-design.md](./webgpu-renderer-design.md)** — pipeline behavior, object-ID layout, holodeck plan, GPU deformation (§5), WGSL summary.
 
-- §1: Current WebGPU surface (what is implemented).
-- §2–3: Advanced features (Sims-style pipeline, terrain/walls/roofs, highlighting, pie menu) — mostly future.
+- §1: Current WebGPU surface (implemented APIs and files).
+- §2–3: Advanced Sims-style pipeline (terrain, walls, highlighting, pie menu) — mostly future.
 - §4: Holodeck implementation order (steps 1–3 done; next is step 4 onward).
 - §5: GPU-side skeletal deformation — not started; parallel track to §4.
 
+**WGSL:** Implemented passes are summarized in **§1.2** of [webgpu-renderer-design.md](./webgpu-renderer-design.md).
+
 ---
 
-## Status snapshot (matches tree)
+## Status snapshot
 
 | Area | State |
 |------|--------|
@@ -25,8 +27,8 @@
 | Textures (`loadTexture`, `getTextureFactory`, mooshow loader) | Done |
 | Object-ID buffer + `readObjectIdAt`; mooshow picking | Done |
 | CPU animation | `Practice.tick`, `updateTransforms`, `deformMesh` in JS; deformed verts uploaded every frame |
-| Console noise (renderer / texture / deform / pick) | **Done:** gated behind `Renderer.create(canvas, { verbose: true })`, `StageConfig.verbose`, or `?vitamooVerbose=1` (default quiet) |
-| GPU skeletal deformation / compute | Not started (see §5) |
+| Console noise (renderer / texture / deform / pick) | Done: gated behind `Renderer.create(canvas, { verbose: true })`, `StageConfig.verbose`, or `?vitamooVerbose=1` (default quiet) |
+| GPU skeletal deformation / compute | Not started (see §5 in design doc) |
 | Holodeck background (terrain, sprites, walls) | Not started (§4 steps 4–5) |
 | Highlight / selection tint in app | WGSL has `highlight` + `ambient` uniforms; mooshow does not expose setters yet (defaults only) |
 
@@ -46,23 +48,18 @@
 
 | File | Role |
 |------|------|
-| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas, options?)` — optional `{ verbose?: boolean }`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual attachments: three `r32uint` pick layers + swapchain color (see README). |
+| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas, options?)` — optional `{ verbose?: boolean }`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual attachments: three `r32uint` pick layers + swapchain color (see [README](../README.md)). |
 | `vitamoo/vitamoo/texture.ts` | `parseBMP`; `loadTexture(device, queue, url, verbose?)` → `TextureHandle` (`GPUTexture`). |
 
 **mooshow:** `Renderer.create(canvas, { verbose })` → `setViewport`, `setTextureFactory`. Each frame: clear/fade → `setCamera` → per body `deformMesh(..., { verbose })` then `drawMesh` with `ObjectIdType` / body index / mesh index → plumb-bob draws → `endFrame`. Picking: `readObjectIdAt` (character and plumb-bob types). `setDebugSlice` wired from stage config / URL (`?debugSlice=`).
 
-**Object-ID layout:** Matches §2.3 of the design doc: `vec4u(type, objectId, subObjectId, 0)` in the uint attachment (see `ObjectIdType` in vitamoo exports).
+**Object-ID layout:** Matches §2.3 of [webgpu-renderer-design.md](./webgpu-renderer-design.md) (see `ObjectIdType` in vitamoo exports).
 
 ---
 
-## Pre–§5 checklist (before GPU deformation work)
+## Before GPU deformation work
 
-Use this when starting the **Performance track** so the CPU and GPU paths stay aligned.
-
-1. **Contract:** Document per-frame inputs: bone world transforms after `updateTransforms` (same data `deformMesh` uses). Outputs: deformed positions/normals per vertex, bit-exact with CPU path for regression tests (or document acceptable tolerances).
-2. **Integration:** One compute pass (or dispatch) before the existing main render pass; same depth buffer and object-ID attachments; `drawMesh` reads from a GPU vertex buffer instead of a `Float32Array` from JS (or a hybrid during bring-up).
-3. **Fallback:** If `device` lacks required limits or compute fails, keep the current `deformMesh` + `drawMesh` path (feature-detect in `Renderer` or stage).
-4. **Profiling:** Measure frame time and upload size before/after; goal is fewer bytes across the CPU–GPU boundary per character.
+See **[gpu-deformation-prerequisites.md](./gpu-deformation-prerequisites.md)** (contract, integration, fallback, profiling).
 
 ---
 
@@ -80,15 +77,7 @@ Pick one track and ship a vertical slice.
 2. **Option B** (later): move animation evaluation to GPU.
 
 **Optional polish**  
-- Bone-level id in the object-ID buffer (§2.3 TODO in `WEBGPU-RENDERER-DESIGN.md`) for mesh-part picking.
-
----
-
-## Shader reference (current WGSL)
-
-- **Mesh:** Positions/normals/UVs; uniforms include projection, modelView, lightDir, alpha, fadeColor, hasTexture, ambient, diffuseFactor, highlight (vec4), idType/objectId/subObjectId, debugMode. Fragment writes object-id output and color output; diffuse + texture; highlight mix when `highlight.a > 0`.
-- **Fullscreen quad:** Fade only; writes zero object id where dual-target is active.
-- **Diamond:** Mesh pipeline branch, solid color, optional object id.
+- Bone-level id in the object-ID buffer (§2.3 TODO in [webgpu-renderer-design.md](./webgpu-renderer-design.md)) for mesh-part picking.
 
 ---
 
@@ -105,4 +94,4 @@ Pick one track and ship a vertical slice.
 
 - **obliterator-designs/designs/04-DISPLAY-LISTS-AND-GPU-RESOURCES.md** — Display lists + resource pools.
 - **obliterator-designs/designs/05-SIMS1-WORLD-RENDER-LAYERS.md** — Sims draw order.
-- **vitamoo/REFACTOR-PLAN.md** — Broader refactor status.
+- **[../REFACTOR-PLAN.md](../REFACTOR-PLAN.md)** — Layer split and refactor phases.

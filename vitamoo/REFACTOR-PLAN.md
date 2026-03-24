@@ -13,7 +13,7 @@
 
 Definition of Done: items 1–5 are met for shipping layers (core, mooshow, vitamoospace, Pages, quiet default console).
 
-**Beyond Phase 5:** Holodeck (§4 in `docs/WEBGPU-RENDERER-DESIGN.md`) and **GPU skeletal deformation** (§5, parallel track). See `docs/WEBGPU-HANDOFF-CONTEXT.md` for current status and pre–§5 checklist. Further-out: RGB+alpha+z layered sprites from 3D for object tooling, save file viewing/editing.
+**Beyond Phase 5:** Holodeck (§4 in [`docs/webgpu-renderer-design.md`](docs/webgpu-renderer-design.md)) and **GPU skeletal deformation** (§5, parallel track). Status and roadmap: [`docs/webgpu-renderer-status.md`](docs/webgpu-renderer-status.md). Prerequisites before §5: [`docs/gpu-deformation-prerequisites.md`](docs/gpu-deformation-prerequisites.md). Further-out: RGB+alpha+z layered sprites from 3D for object tooling, save file viewing/editing.
 
 ---
 
