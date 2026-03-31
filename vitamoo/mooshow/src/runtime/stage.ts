@@ -54,6 +54,11 @@ export interface StageConfig {
      * Default false. Also enable in the browser with URL query `?vitamooVerbose=1` (overridden if this is set).
      */
     verbose?: boolean;
+    /** Main character pass: ambient and directional scale (see `Renderer.setSceneLighting`). */
+    sceneLighting?: { ambient: number; diffuseFactor: number };
+    /** RGBA tint mixed toward selection / hover (see `Renderer.setHighlight`). */
+    selectionHighlight?: { r: number; g: number; b: number; a: number };
+    hoverHighlight?: { r: number; g: number; b: number; a: number };
 }
 
 export class MooShowStage {
@@ -86,6 +91,11 @@ export class MooShowStage {
     private _plumbBobUiAmbient: number;
     private _plumbBobUiDiffuse: number;
     private readonly _verbose: boolean;
+    private _hoverActor = -1;
+    private _lastHoverPickMs = 0;
+    private readonly _selHi: { r: number; g: number; b: number; a: number };
+    private readonly _hovHi: { r: number; g: number; b: number; a: number };
+    private readonly _sceneLighting: StageConfig['sceneLighting'];
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
@@ -103,6 +113,9 @@ export class MooShowStage {
         const ui = config.plumbBobUiLighting;
         this._plumbBobUiAmbient = ui?.ambient ?? 0.9;
         this._plumbBobUiDiffuse = ui?.diffuse ?? 0.14;
+        this._selHi = config.selectionHighlight ?? { r: 0.25, g: 0.35, b: 0.55, a: 0.28 };
+        this._hovHi = config.hoverHighlight ?? { r: 0.2, g: 0.45, b: 0.28, a: 0.18 };
+        this._sceneLighting = config.sceneLighting;
 
         this._initRenderer();
         this._bindCanvasEvents();
@@ -130,6 +143,8 @@ export class MooShowStage {
                 }
                 r.setPlumbBobScale(this._plumbBobScale);
                 r.setPlumbBobUiLighting(this._plumbBobUiAmbient, this._plumbBobUiDiffuse);
+                const sl = this._sceneLighting;
+                if (sl) r.setSceneLighting(sl.ambient, sl.diffuseFactor);
                 const ds = new URLSearchParams(window.location.search).get('debugSlice');
                 if (ds !== null) {
                     const m = parseInt(ds, 10);
@@ -209,6 +224,7 @@ export class MooShowStage {
         if (!scenes?.[sceneIndex]) return;
 
         const newBodies = await this.loader.loadScene(sceneIndex);
+        this._clearHover();
         this._bodies = newBodies;
         this._activeScene = scenes[sceneIndex].name;
         this._selectedActor = newBodies.length === 1 ? 0 : -1;
@@ -230,6 +246,7 @@ export class MooShowStage {
         if (!chars?.[charIndex]) return;
         this._activeScene = null;
         const body = await this.loader.loadCharacterBody(chars[charIndex]);
+        this._clearHover();
         this._bodies = body ? [body] : [];
         this._selectedActor = this._bodies.length === 1 ? 0 : -1;
         if (body) {
@@ -247,6 +264,7 @@ export class MooShowStage {
         if (!chars?.[charIndex] || !prev) return;
         const next = await this.loader.loadCharacterBodyReplacing(chars[charIndex], prev);
         if (!next) return;
+        this._clearHover();
         this._bodies[actorIndex] = next;
         this.hooks.onSelectionChange?.(this._selectedActor);
         this.sound.simlishGreet(actorIndex, this._bodies);
@@ -441,6 +459,54 @@ export class MooShowStage {
         return this._parseDebugSliceFromUrl() ?? 0;
     }
 
+    private _clearHover(): void {
+        if (this._hoverActor === -1) return;
+        this._hoverActor = -1;
+        this.hooks.onHover?.(null);
+        this.hooks.onHighlight?.(null);
+    }
+
+    private _applyActorHighlight(renderer: NonNullable<ResolvedRenderer>, bi: number): void {
+        const h = this._hoverActor;
+        const s = this._selectedActor;
+        if (s >= 0 && bi === s) {
+            const t = this._selHi;
+            renderer.setHighlight(t.r, t.g, t.b, t.a);
+        } else if (h >= 0 && bi === h && bi !== s) {
+            const t = this._hovHi;
+            renderer.setHighlight(t.r, t.g, t.b, t.a);
+        } else {
+            renderer.setHighlight(0, 0, 0, 0);
+        }
+    }
+
+    private _scheduleHoverPick(e: MouseEvent): void {
+        const now = performance.now();
+        if (now - this._lastHoverPickMs < 90) return;
+        this._lastHoverPickMs = now;
+        void this._updateHoverAtClient(e.clientX, e.clientY);
+    }
+
+    private async _updateHoverAtClient(clientX: number, clientY: number): Promise<void> {
+        const renderer = await this._getRenderer();
+        if (!renderer || this._bodies.length === 0) return;
+        const rect = this.canvas.getBoundingClientRect();
+        const localX = clientX - rect.left;
+        const localY = clientY - rect.top;
+        const scaleX = this.canvas.width / (rect.width || 1);
+        const scaleY = this.canvas.height / (rect.height || 1);
+        const bufferX = localX * scaleX;
+        const bufferY = localY * scaleY;
+        const { type, objectId } = await renderer.readObjectIdAt(bufferX, bufferY);
+        const picked =
+            type === ObjectIdType.CHARACTER || type === ObjectIdType.PLUMB_BOB ? objectId : -1;
+        if (picked === this._hoverActor) return;
+        this._hoverActor = picked;
+        this.hooks.onHover?.(picked >= 0 ? picked : null);
+        this.hooks.onHighlight?.(picked >= 0 ? picked : null);
+        this._renderFrame();
+    }
+
     private async _renderFrame(): Promise<void> {
         const renderer = await this._getRenderer();
         if (!renderer) return;
@@ -477,6 +543,7 @@ export class MooShowStage {
             this._cameraTarget.x, this._cameraTarget.y, this._cameraTarget.z);
 
         for (let bi = 0; bi < this._bodies.length; bi++) {
+            this._applyActorHighlight(renderer, bi);
             const body = this._bodies[bi];
             const bTop = body.top;
             const spinDeg = (body.direction || 0) + (body.spinOffset || 0);
@@ -529,6 +596,7 @@ export class MooShowStage {
         }
 
         if (this._bodies.length > 0) {
+            renderer.setHighlight(0, 0, 0, 0);
             const now = performance.now();
             const plumbRot = now * 0.001 * Math.PI;
             const bob = Math.sin(now * 0.002) * 0.12;
@@ -648,6 +716,18 @@ export class MooShowStage {
                 }
             }
             e.preventDefault();
+        });
+
+        c.addEventListener('mousemove', (e: MouseEvent) => {
+            if (this.spin.isDragging) return;
+            if (this._bodies.length === 0) return;
+            this._scheduleHoverPick(e);
+        });
+
+        c.addEventListener('mouseleave', () => {
+            if (this._hoverActor === -1) return;
+            this._clearHover();
+            this._renderFrame();
         });
 
         window.addEventListener('mousemove', (e: MouseEvent) => {

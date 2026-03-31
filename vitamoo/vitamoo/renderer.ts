@@ -869,6 +869,25 @@ export class Renderer {
         this.plumbBobUiDiffuse = Math.max(0, diffuse);
     }
 
+    /**
+     * Character mesh lighting (WGSL `ambient` + `diffuseFactor` on the main mesh pass). Defaults 0.25 / 0.75.
+     * Plumb-bob UI uses {@link setPlumbBobUiLighting} separately.
+     */
+    setSceneLighting(ambient: number, diffuseFactor: number): void {
+        this.ambient = Math.max(0, ambient);
+        this.diffuseFactor = Math.max(0, diffuseFactor);
+    }
+
+    /**
+     * Tint mixed into lit mesh color when `a > 0` (per draw). Call before each {@link drawMesh} for selection/hover.
+     */
+    setHighlight(r: number, g: number, b: number, a: number): void {
+        this.highlight[0] = r;
+        this.highlight[1] = g;
+        this.highlight[2] = b;
+        this.highlight[3] = Math.max(0, a);
+    }
+
     endFrame(): void {
         this._endFrame();
     }
