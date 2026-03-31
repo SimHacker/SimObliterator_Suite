@@ -129,6 +129,23 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 | Pie menu feather | Fullscreen quad | Radial alpha / vignette |
 | Pie menu shadow | Fullscreen / quad | Soft drop shadow behind menu |
 | Pie menu head | Mesh (existing) | Head-only render in center; animation system already supports it |
+| Censorship (bbox pixelization) | Post-process and/or mesh pass + ID/depth | §3.11 — projected mesh/bone bounds → mosaic/pixelize region |
+
+### 3.11 Censorship: mesh bounding-box pixelization
+
+**Goal:** Policy-driven **moderation** of what the viewer shows—without full body segmentation—by **pixelizing or mosaicking** only the pixels covered by **mesh (or bone-attached) axis-aligned or oriented bounds** once projected to screen space.
+
+**Inputs:** Per draw or per asset, one or more **world-space AABBs or OBBs** (from mesh bounds, per-bone collision volumes, or author tags). Each frame (or when bounds change), **project corners** with the same view-projection as the main pass, build a **conservative screen rectangle** (clamp to viewport). Collect the set of rects for “censored” regions.
+
+**Rendering options:**
+
+1. **Post-process / fullscreen pass:** After the main color buffer is resolved, a **fullscreen** (or **scoped quad**) pass samples the scene texture; inside union of censorship rects, replace the neighborhood with a **block average** (mosaic) or **quantized** color (pixelization). Outside, copy through. Needs **depth awareness** if rects overlap in 2D but one occludes the other—use **depth buffer** in the same pass (sample scene depth vs mesh depth at rect pixels) or **stencil / ID buffer** so only pixels that actually belong to the censored draw are affected (object-ID buffer from §2.3 helps: censor only where `objectId` matches flagged bodies).
+
+2. **Per-draw in mesh shader:** For flagged meshes, fragment shader **snaps** UV or screen position to a coarse grid before texture/sample (cheap mosaic on that object only). Simpler but **does not** hide shadows or reflections on other surfaces.
+
+3. **Hybrid:** Object-ID pass already tags pixels; a **compute or fragment** pass reads color + ID + depth and applies mosaic where `(objectId, subObjectId)` is in a **censor list** **or** screen position falls inside projected bbox **and** depth matches (approximate).
+
+**Engineering notes:** Animated characters need **per-frame bbox update** (skinning expands bounds—use conservative hull or bone OBBs). **Overlapping** actors require z-test or ID-based masking. Shares the same **fullscreen / post-process** vocabulary as pie-menu work (§3.9) and the **projection** path used for picking.
 
 ---
 
@@ -144,6 +161,7 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 6. **Lighting** — directional + ambient already in WGSL; expose and tune from mooshow (public setters if missing).
 7. **Highlight / selection / feedback** — highlight uniform exists in shader; wire hover/selected ids from stage and add API on `Renderer` if needed; optional small overlay pass.
 8. **Pie menu** (desaturated bg, feather, shadow) when the app adds a pie UI.
+9. **Censorship / bbox pixelization** (§3.11) when moderation or safe-stream requirements land—likely after object-ID + optional post-process path is stable.
 
 **Parallel track — performance (§5)**  
 Not scheduled inside steps 4–8: **GPU-side deformation** (then optional full GPU animation). Reduces per-frame vertex upload; large win for crowds. Starts only when someone takes §5 as the active task.

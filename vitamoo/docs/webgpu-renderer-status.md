@@ -78,6 +78,7 @@ Pick one track and ship a vertical slice.
 
 **Optional polish**  
 - Bone-level id in the object-ID buffer (§2.3 TODO in [webgpu-renderer-design.md](./webgpu-renderer-design.md)) for mesh-part picking.
+- **Censorship / mesh-bbox pixelization** (§3.11 in [webgpu-renderer-design.md](./webgpu-renderer-design.md)) — post-process or ID-aware mosaic for safe streams / policy.
 
 ---
 
@@ -86,6 +87,7 @@ Pick one track and ship a vertical slice.
 - Holodeck terrain, floors, walls, roofs, layered sprite authoring pipeline.
 - GPU-side skeletal deformation and GPU-resident animation (§5).
 - Pie menu passes (desaturate, vignette) and head-in-pie wiring in the app.
+- Bbox-driven **pixelization / censorship** pass (design §3.11; not implemented).
 - Display-list **executor** that consumes `DisplayListEntry[]` for the whole scene (types exist; stage still loops bodies explicitly).
 
 ---
