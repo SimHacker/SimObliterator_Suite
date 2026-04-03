@@ -28,6 +28,7 @@
 | Object-ID buffer + `readObjectIdAt`; mooshow picking | Done |
 | CPU animation | `Practice.tick`, `updateTransforms`, `deformMesh` in JS; deformed verts uploaded every frame |
 | Console noise (renderer / texture / deform / pick) | Done: gated behind `Renderer.create(canvas, { verbose: true })`, `StageConfig.verbose`, or `?vitamooVerbose=1` (default quiet) |
+| GPU allocation instrumentation | Done: `Renderer.create(..., { instrumentation })` and `StageConfig.gpuInstrumentation`; see [gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md) |
 | GPU skeletal deformation / compute | Not started (see §5 in design doc) |
 | Holodeck background (terrain, sprites, walls) | Not started (§4 steps 4–5) |
 | Highlight / selection tint in app | WGSL has `highlight` + `ambient` uniforms; mooshow does not expose setters yet (defaults only) |
@@ -48,8 +49,9 @@
 
 | File | Role |
 |------|------|
-| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas, options?)` — optional `{ verbose?: boolean }`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual attachments: three `r32uint` pick layers + swapchain color (see [README](../README.md)). |
-| `vitamoo/vitamoo/texture.ts` | `parseBMP`; `loadTexture(device, queue, url, verbose?)` → `TextureHandle` (`GPUTexture`). |
+| `vitamoo/vitamoo/renderer.ts` | `Renderer.create(canvas, options?)` — optional `{ verbose?, instrumentation? }`. `clear`, `fadeScreen`, `setCamera`, `setCulling`, `drawMesh(…, objectId?)`, `drawDiamond(…, objectId?)`, `setViewport`, `endFrame`, `getTextureFactory`, `readObjectIdAt`, `setDebugSlice`, `setPlumbBobMeshes`, `setPlumbBobScale`. Dual attachments: three `r32uint` pick layers + swapchain color (see [README](../README.md)). |
+| `vitamoo/vitamoo/texture.ts` | `parseBMP`; `loadTexture(device, queue, url, verbose?, instrumentation?)` → `TextureHandle` (`GPUTexture`). |
+| `vitamoo/vitamoo/gpu-instrumentation.ts` | Types and optional callbacks for GPU buffer/texture allocate and destroy (viewport + loaded images). |
 
 **mooshow:** `Renderer.create(canvas, { verbose })` → `setViewport`, `setTextureFactory`. Each frame: clear/fade → `setCamera` → per body `deformMesh(..., { verbose })` then `drawMesh` with `ObjectIdType` / body index / mesh index → plumb-bob draws → `endFrame`. Picking: `readObjectIdAt` (character and plumb-bob types). `setDebugSlice` wired from stage config / URL (`?debugSlice=`).
 
@@ -94,6 +96,9 @@ Pick one track and ship a vertical slice.
 
 ## Related design docs
 
+- **[gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md)** — Resident GPU data, readback for object export (sprites / BMP / IFF), glTF interchange, streamed animation from clips.
+- **[sims-content-pipeline-notes.md](./sims-content-pipeline-notes.md)** — 3DS Max note tracks, CMX Exporter, Transmogrifier/RugOMatic/ShowNTell, community sites, and how they map to VitaMoo browser tools.
+- **[gltf-extras-metadata.md](./gltf-extras-metadata.md)** — glTF `extras` as the universal metadata layer: skeleton/suit/accessory tags, bone flags, skill metadata, time-keyed events, catalog data. Round-trip through Blender.
 - **obliterator-designs/designs/04-DISPLAY-LISTS-AND-GPU-RESOURCES.md** — Display lists + resource pools.
 - **obliterator-designs/designs/05-SIMS1-WORLD-RENDER-LAYERS.md** — Sims draw order.
 - **[../REFACTOR-PLAN.md](../REFACTOR-PLAN.md)** — Layer split and refactor phases.

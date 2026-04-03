@@ -7,6 +7,9 @@ Focused notes for the **WebGPU renderer** and related roadmap. The **full stack 
 | **[webgpu-renderer-design.md](./webgpu-renderer-design.md)** | **Specification:** current pipeline, object-ID layout, holodeck roadmap (§4), GPU deformation (§5), WGSL overview, display-list shapes. Update this when behavior or formats change. |
 | **[webgpu-renderer-status.md](./webgpu-renderer-status.md)** | **Living status:** what is implemented vs planned, GitHub Pages deployment, file-level map, recommended next steps, out-of-scope list, links to sibling repos. |
 | **[gpu-deformation-prerequisites.md](./gpu-deformation-prerequisites.md)** | **Checklist** before starting GPU skinning work (contract, integration, fallback, profiling). |
+| **[gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md)** | Resident GPU data, readback for browser object export (sprites / BMP / IFF), glTF interchange, streamed animation from clips. |
+| **[sims-content-pipeline-notes.md](./sims-content-pipeline-notes.md)** | Historical notes on 3DS Max note tracks, the CMX Exporter, Transmogrifier/RugOMatic/ShowNTell, community content sites, and how they inform VitaMoo's browser-based tool and interchange design. |
+| **[gltf-extras-metadata.md](./gltf-extras-metadata.md)** | How VitaMoo uses glTF `extras` for the same purposes as 3DS Max note tracks: skeleton/suit/accessory tagging, bone flags, animation skill metadata, time-keyed events, content catalog data. Round-trip-safe through Blender and conformant tools. |
 
 **Reading order:** [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for orientation, then [`webgpu-renderer-design.md`](./webgpu-renderer-design.md) for depth. Use the prerequisites doc when beginning §5 work.
 

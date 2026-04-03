@@ -18,6 +18,40 @@ export {
 
 export { buildSkeleton, findRoot, findBone, updateTransforms, deformMesh } from './skeleton.js';
 export type { DeformMeshOptions } from './skeleton.js';
+
+export {
+    defaultCharacterPipelineStages,
+    mergeCharacterPipelineStages,
+    defaultGpuCharacterPipelineCaps,
+    effectivePipelineBackend,
+    gpuStageFallbackWarnings,
+    defaultPipelineValidationSettings,
+    mergePipelineValidationSettings,
+    compareCpuVec3ToGpuInterleaved,
+    compareDeformedMeshCpuVsGpuInterleaved,
+    DEFORMED_MESH_FLOATS_PER_VERTEX,
+} from './character-pipeline.js';
+export type {
+    PipelineStageBackend,
+    CharacterPipelineStages,
+    GpuCharacterPipelineCaps,
+    DeformedMeshReadbackKey,
+    DeformedMeshReadbackResult,
+    PipelineValidationSettings,
+    Float32BatchCompareResult,
+    DeformationCompareSummary,
+} from './character-pipeline.js';
+
+export {
+    PipelineBuffer,
+    packBoneTransforms,
+    createBoneTransformBuffer,
+    packDeformedMesh,
+    createDeformedMeshBuffer,
+    BONE_TRANSFORM_FLOATS,
+    DEFORMED_VERTEX_FLOATS,
+} from './pipeline-buffer.js';
+export type { PipelineBufferAuthority, PipelineBufferOptions } from './pipeline-buffer.js';
 export {
     Renderer,
     ObjectIdType,
@@ -27,6 +61,12 @@ export {
     meshFragmentDebugModeLabel,
 } from './renderer.js';
 export type { MeshFragmentDebugModeId, RendererCreateOptions } from './renderer.js';
+export type {
+    GpuResourceKind,
+    GpuResourceAllocatedEvent,
+    GpuResourceDestroyedEvent,
+    GpuInstrumentationCallbacks,
+} from './gpu-instrumentation.js';
 export {
     DataReader, TextReader, BinaryReader, BinaryWriter,
     buildDeltaTable, decompressFloats, compressFloats,

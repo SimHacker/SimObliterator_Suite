@@ -1,6 +1,8 @@
 // VitaMoo texture loader — reads BMP files (Sims native format),
 // plus PNG and JPG when the file extension says so.
 /// <reference types="@webgpu/types" />
+
+import type { GpuInstrumentationCallbacks } from './gpu-instrumentation.js';
 //
 // BMP is the canonical format for Sims 1 skin textures. They're 8-bit
 // indexed color with a 256-entry palette. We read them directly because
@@ -178,6 +180,7 @@ export async function loadTexture(
     queue: GPUQueue,
     url: string,
     verbose = false,
+    instrumentation?: GpuInstrumentationCallbacks,
 ): Promise<TextureHandle> {
     const ext = url.split('.').pop()?.toLowerCase() ?? '';
     let bitmap: ImageBitmap;
@@ -215,6 +218,17 @@ export async function loadTexture(
         [w, h, 1],
     );
     bitmap.close();
+    const byteSize = w * h * 4;
+    instrumentation?.onResourceAllocated?.({
+        kind: 'texture',
+        purpose: 'image-texture',
+        width: w,
+        height: h,
+        depthOrArrayLayers: 1,
+        format: 'rgba8unorm',
+        byteSize,
+        label: url,
+    });
     if (verbose) console.log('[texture] loaded', url, `${w}x${h}`);
     return tex;
 }

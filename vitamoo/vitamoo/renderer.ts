@@ -2,6 +2,17 @@
 /// <reference types="@webgpu/types" />
 
 import { Vec2, Vec3, MeshData } from './types.js';
+import type {
+    GpuCharacterPipelineCaps,
+    DeformedMeshReadbackKey,
+    DeformedMeshReadbackResult,
+} from './character-pipeline.js';
+import { defaultGpuCharacterPipelineCaps } from './character-pipeline.js';
+import type {
+    GpuInstrumentationCallbacks,
+    GpuResourceAllocatedEvent,
+    GpuResourceDestroyedEvent,
+} from './gpu-instrumentation.js';
 import { loadTexture } from './texture.js';
 import { createDiamondMesh } from './procedural/diamond.js';
 import { transformMesh } from './display-list.js';
@@ -384,6 +395,11 @@ export interface RendererCreateOptions {
      * Default false for published builds. mooshow also enables via `StageConfig.verbose` or `?vitamooVerbose=1`.
      */
     verbose?: boolean;
+    /**
+     * Optional GPU allocation/destruction callbacks for tooling and future resource managers.
+     * See `docs/gpu-assets-tooling-roadmap.md`.
+     */
+    instrumentation?: GpuInstrumentationCallbacks;
 }
 
 /** Three r32uint MRT layers (id type, object id, sub-object id) plus swapchain color; see device.limits.maxColorAttachments (minimum 4). */
@@ -467,6 +483,14 @@ export class Renderer {
         return this.options.verbose === true;
     }
 
+    private _gpuAlloc(ev: GpuResourceAllocatedEvent): void {
+        this.options.instrumentation?.onResourceAllocated?.(ev);
+    }
+
+    private _gpuDestroy(ev: GpuResourceDestroyedEvent): void {
+        this.options.instrumentation?.onResourceDestroyed?.(ev);
+    }
+
     private async _init(): Promise<void> {
         const adapter = await navigator.gpu?.requestAdapter();
         if (!adapter) throw new Error('WebGPU not available');
@@ -491,6 +515,12 @@ export class Renderer {
             size: QUAD_UNIFORM_SIZE,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
+        this._gpuAlloc({
+            kind: 'buffer',
+            purpose: 'quad-uniform',
+            byteSize: QUAD_UNIFORM_SIZE,
+            label: 'fullscreen-quad-uniform',
+        });
         this.defaultSampler = this.device.createSampler({
             minFilter: 'linear',
             magFilter: 'linear',
@@ -508,6 +538,16 @@ export class Renderer {
             { bytesPerRow: 4, rowsPerImage: 1 },
             [1, 1, 1],
         );
+        this._gpuAlloc({
+            kind: 'texture',
+            purpose: 'dummy-sampling',
+            width: 1,
+            height: 1,
+            depthOrArrayLayers: 1,
+            format: 'rgba8unorm',
+            byteSize: 4,
+            label: '1x1-white',
+        });
 
         this.meshBindGroupLayout = this.device.createBindGroupLayout({
             entries: [
@@ -660,25 +700,69 @@ export class Renderer {
 
     setViewport(x: number, y: number, w: number, h: number): void {
         this.viewport = { x, y, w, h };
-        if (this.depthTexture) this.depthTexture.destroy();
+        if (this.depthTexture) {
+            this._gpuDestroy({ kind: 'texture', purpose: 'viewport-depth' });
+            this.depthTexture.destroy();
+        }
         if (this.pickTextures) {
+            this._gpuDestroy({ kind: 'texture', purpose: 'viewport-pick-idType' });
             this.pickTextures.idType.destroy();
+            this._gpuDestroy({ kind: 'texture', purpose: 'viewport-pick-objectId' });
             this.pickTextures.objectId.destroy();
+            this._gpuDestroy({ kind: 'texture', purpose: 'viewport-pick-subObjectId' });
             this.pickTextures.subObjectId.destroy();
         }
         if (w > 0 && h > 0) {
+            const depthBytes = w * h * 4;
             this.depthTexture = this.device.createTexture({
                 size: [w, h, 1],
                 format: 'depth24plus',
                 usage: GPUTextureUsage.RENDER_ATTACHMENT,
             });
+            this._gpuAlloc({
+                kind: 'texture',
+                purpose: 'viewport-depth',
+                width: w,
+                height: h,
+                depthOrArrayLayers: 1,
+                format: 'depth24plus',
+                byteSize: depthBytes,
+            });
             const pickUsage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC;
             const size: GPUExtent3D = [w, h, 1];
+            const pickBytes = w * h * 4;
             this.pickTextures = {
                 idType: this.device.createTexture({ size, format: 'r32uint', usage: pickUsage }),
                 objectId: this.device.createTexture({ size, format: 'r32uint', usage: pickUsage }),
                 subObjectId: this.device.createTexture({ size, format: 'r32uint', usage: pickUsage }),
             };
+            this._gpuAlloc({
+                kind: 'texture',
+                purpose: 'viewport-pick-idType',
+                width: w,
+                height: h,
+                depthOrArrayLayers: 1,
+                format: 'r32uint',
+                byteSize: pickBytes,
+            });
+            this._gpuAlloc({
+                kind: 'texture',
+                purpose: 'viewport-pick-objectId',
+                width: w,
+                height: h,
+                depthOrArrayLayers: 1,
+                format: 'r32uint',
+                byteSize: pickBytes,
+            });
+            this._gpuAlloc({
+                kind: 'texture',
+                purpose: 'viewport-pick-subObjectId',
+                width: w,
+                height: h,
+                depthOrArrayLayers: 1,
+                format: 'r32uint',
+                byteSize: pickBytes,
+            });
         } else {
             this.depthTexture = null;
             this.pickTextures = null;
@@ -687,8 +771,9 @@ export class Renderer {
 
     getTextureFactory(): { createTextureFromUrl(url: string): Promise<TextureHandle> } {
         const v = this.verbose;
+        const inst = this.options.instrumentation;
         return {
-            createTextureFromUrl: (url: string) => loadTexture(this.device, this.queue, url, v),
+            createTextureFromUrl: (url: string) => loadTexture(this.device, this.queue, url, v, inst),
         };
     }
 
@@ -1157,5 +1242,20 @@ export class Renderer {
         buffer.unmap();
         buffer.destroy();
         return { type, objectId, subObjectId };
+    }
+
+    /**
+     * Which GPU character-pipeline stages are implemented. When a stage is false, mooshow falls back to CPU.
+     */
+    getGpuCharacterPipelineCaps(): GpuCharacterPipelineCaps {
+        return defaultGpuCharacterPipelineCaps();
+    }
+
+    /**
+     * Read back GPU deformation output for validation against CPU `deformMesh`.
+     * Returns null until GPU deformation is implemented and keyed meshes are registered.
+     */
+    async readbackDeformedMeshForValidation(_key: DeformedMeshReadbackKey): Promise<DeformedMeshReadbackResult | null> {
+        return null;
     }
 }

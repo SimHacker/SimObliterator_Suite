@@ -6,6 +6,18 @@ import {
     deformMesh,
     loadGltfMeshes,
     MESH_FRAGMENT_DEBUG_MODE_MAX,
+    mergeCharacterPipelineStages,
+    mergePipelineValidationSettings,
+    effectivePipelineBackend,
+    gpuStageFallbackWarnings,
+    compareDeformedMeshCpuVsGpuInterleaved,
+    defaultGpuCharacterPipelineCaps,
+} from 'vitamoo';
+import type {
+    CharacterPipelineStages,
+    PipelineValidationSettings,
+    GpuCharacterPipelineCaps,
+    GpuInstrumentationCallbacks,
 } from 'vitamoo';
 
 type ResolvedRenderer = Awaited<ReturnType<typeof Renderer.create>> | null;
@@ -59,6 +71,19 @@ export interface StageConfig {
     /** RGBA tint mixed toward selection / hover (see `Renderer.setHighlight`). */
     selectionHighlight?: { r: number; g: number; b: number; a: number };
     hoverHighlight?: { r: number; g: number; b: number; a: number };
+    /**
+     * Per-stage CPU vs GPU backend for `animation` and `deformation`.
+     * Rasterization is always WebGPU (no CPU/WebGL path).
+     * Unsupported GPU stages fall back to CPU with a one-time console warning.
+     */
+    characterPipeline?: Partial<CharacterPipelineStages>;
+    /**
+     * Optional CPU↔GPU validation (e.g. read back GPU deformation and compare to `deformMesh`).
+     * URL `?vitamooPipelineValidation=1` merges `{ enabled: true, compareDeformation: true }`.
+     */
+    pipelineValidation?: Partial<PipelineValidationSettings>;
+    /** Forwarded to `Renderer.create` for GPU allocation telemetry (see vitamoo `gpu-instrumentation.ts`). */
+    gpuInstrumentation?: GpuInstrumentationCallbacks;
 }
 
 export class MooShowStage {
@@ -96,13 +121,36 @@ export class MooShowStage {
     private readonly _selHi: { r: number; g: number; b: number; a: number };
     private readonly _hovHi: { r: number; g: number; b: number; a: number };
     private readonly _sceneLighting: StageConfig['sceneLighting'];
+    private readonly _gpuInstrumentation: GpuInstrumentationCallbacks | undefined;
+
+    private _characterPipeline: CharacterPipelineStages;
+    private _pipelineValidation: PipelineValidationSettings;
+    private _gpuCapsCache: GpuCharacterPipelineCaps;
+    private readonly _pipelineFallbackKeys = new Set<string>();
+    private _validationFrameCounter = 0;
+    private _validateDeformThisFrame = false;
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
         const urlVerbose =
             typeof window !== 'undefined' &&
             new URLSearchParams(window.location.search).get('vitamooVerbose') === '1';
+        const urlPipelineVal =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('vitamooPipelineValidation') === '1';
+        const urlDeformGpu =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('vitamooDeformGpu') === '1';
         this._verbose = config.verbose ?? urlVerbose;
+        this._characterPipeline = mergeCharacterPipelineStages({
+            ...config.characterPipeline,
+            ...(urlDeformGpu ? { deformation: 'gpu' as const } : {}),
+        });
+        this._pipelineValidation = mergePipelineValidationSettings({
+            ...config.pipelineValidation,
+            ...(urlPipelineVal ? { enabled: true, compareDeformation: true } : {}),
+        });
+        this._gpuCapsCache = defaultGpuCharacterPipelineCaps();
         this.hooks = { ...defaultHooks, ...config.hooks };
         this.loader = new ContentLoader(config.assetsBaseUrl ?? '');
         this.spin = new SpinController();
@@ -116,6 +164,7 @@ export class MooShowStage {
         this._selHi = config.selectionHighlight ?? { r: 0.25, g: 0.35, b: 0.55, a: 0.28 };
         this._hovHi = config.hoverHighlight ?? { r: 0.2, g: 0.45, b: 0.28, a: 0.18 };
         this._sceneLighting = config.sceneLighting;
+        this._gpuInstrumentation = config.gpuInstrumentation;
 
         this._initRenderer();
         this._bindCanvasEvents();
@@ -125,11 +174,15 @@ export class MooShowStage {
         this.canvas.width = this.canvas.clientWidth;
         this.canvas.height = this.canvas.clientHeight;
         const plumbBobUrl = this._plumbBobUrl;
-        this._renderer = Renderer.create(this.canvas, { verbose: this._verbose }).catch((e) => {
+        this._renderer = Renderer.create(this.canvas, {
+            verbose: this._verbose,
+            instrumentation: this._gpuInstrumentation,
+        }).catch((e) => {
             console.error('WebGPU init failed:', e);
             return null;
         }).then(async (r) => {
             if (r) {
+                this._gpuCapsCache = r.getGpuCharacterPipelineCaps();
                 this.loader.setTextureFactory(r.getTextureFactory());
                 r.setViewport(0, 0, this.canvas.width, this.canvas.height);
                 if (plumbBobUrl) {
@@ -163,6 +216,7 @@ export class MooShowStage {
         if (this._renderer instanceof Promise) {
             this._renderer = await this._renderer;
             if (this._renderer) {
+                this._gpuCapsCache = this._renderer.getGpuCharacterPipelineCaps();
                 this.loader.setTextureFactory(this._renderer.getTextureFactory());
                 this._renderer.setViewport(0, 0, this.canvas.width, this.canvas.height);
                 const ds = new URLSearchParams(window.location.search).get('debugSlice');
@@ -179,6 +233,22 @@ export class MooShowStage {
     get contentIndex(): ContentIndex | null { return this.loader.index; }
     get bodies(): Body[] { return this._bodies; }
     get selectedActor(): number { return this._selectedActor; }
+
+    setCharacterPipelineStages(partial: Partial<CharacterPipelineStages>): void {
+        this._characterPipeline = mergeCharacterPipelineStages({ ...this._characterPipeline, ...partial });
+    }
+
+    setPipelineValidation(partial: Partial<PipelineValidationSettings>): void {
+        this._pipelineValidation = mergePipelineValidationSettings({ ...this._pipelineValidation, ...partial });
+    }
+
+    getCharacterPipelineStages(): CharacterPipelineStages {
+        return { ...this._characterPipeline };
+    }
+
+    getPipelineValidation(): PipelineValidationSettings {
+        return { ...this._pipelineValidation };
+    }
 
     /** Set plumb-bob scale at runtime (default 1). */
     async setPlumbBobScale(scale: number): Promise<void> {
@@ -314,11 +384,10 @@ export class MooShowStage {
             const body = this._bodies[i];
             if (!body?.skeleton) continue;
             const practice = await this.loader._loadAnimation(animName, body.skeleton);
-            if ((practice as any)?.ready) {
-                (practice as any).tick(this._animTime > 0 ? this._animTime : 1);
-                updateTransforms(body.skeleton);
-            }
             body.practice = practice;
+            if ((practice as any)?.ready && body.skeleton) {
+                this._applyAnimationTick(body, this._animTime > 0 ? this._animTime : 1);
+            }
         }
         this._renderFrame();
     }
@@ -379,8 +448,7 @@ export class MooShowStage {
 
             for (const body of this._bodies) {
                 if ((body.practice as any)?.ready && body.skeleton) {
-                    (body.practice as any).tick(this._animTime);
-                    updateTransforms(body.skeleton);
+                    this._applyAnimationTick(body, this._animTime);
                     needsRender = true;
                 }
             }
@@ -487,6 +555,100 @@ export class MooShowStage {
         void this._updateHoverAtClient(e.clientX, e.clientY);
     }
 
+    private _logPipelineFallbackOnce(key: string, message: string): void {
+        if (this._pipelineFallbackKeys.has(key)) return;
+        this._pipelineFallbackKeys.add(key);
+        console.warn('[MooShowStage pipeline]', message);
+    }
+
+    private _applyAnimationTick(body: Body, animTime: number): void {
+        if (!(body.practice as any)?.ready || !body.skeleton) return;
+        const eff = effectivePipelineBackend(
+            this._characterPipeline.animation,
+            this._gpuCapsCache.animation,
+        );
+        if (eff === 'cpu') {
+            (body.practice as any).tick(animTime);
+            updateTransforms(body.skeleton);
+        }
+    }
+
+    private async _maybeValidateDeformation(
+        renderer: NonNullable<ResolvedRenderer>,
+        bi: number,
+        meshIndex: number,
+        cpuVerts: Vec3[],
+        cpuNorms: Vec3[],
+    ): Promise<void> {
+        if (!this._validateDeformThisFrame) return;
+        const val = this._pipelineValidation;
+        if (!val.compareDeformation) return;
+        const defEff = effectivePipelineBackend(
+            this._characterPipeline.deformation,
+            this._gpuCapsCache.deformation,
+        );
+        if (defEff !== 'gpu') return;
+        const readback = await renderer.readbackDeformedMeshForValidation({
+            bodyIndex: bi,
+            meshIndex,
+            vertexCount: cpuVerts.length,
+        });
+        if (!readback) {
+            this._logPipelineFallbackOnce(
+                'validation-readback-null',
+                'pipeline validation: GPU deformation readback is null (GPU deformation not implemented); no comparison.',
+            );
+            return;
+        }
+        const summary = compareDeformedMeshCpuVsGpuInterleaved(
+            cpuVerts,
+            cpuNorms,
+            readback.data,
+            val.maxAbsError,
+        );
+        const bad = summary.positions.mismatchCount + summary.normals.mismatchCount;
+        if (bad > 0) {
+            const firstV =
+                summary.positions.firstMismatchVertex >= 0
+                    ? summary.positions.firstMismatchVertex
+                    : summary.normals.firstMismatchVertex;
+            let logged = 0;
+            const cap = val.maxLoggedVertices;
+            const lines: string[] = [];
+            for (let vi = 0; vi < cpuVerts.length && logged < cap; vi++) {
+                const o = vi * 6;
+                const pv = cpuVerts[vi];
+                const pn = cpuNorms[vi];
+                const gpx = readback.data[o];
+                const gpy = readback.data[o + 1];
+                const gpz = readback.data[o + 2];
+                const gnx = readback.data[o + 3];
+                const gny = readback.data[o + 4];
+                const gnz = readback.data[o + 5];
+                const dpp = Math.max(Math.abs(pv.x - gpx), Math.abs(pv.y - gpy), Math.abs(pv.z - gpz));
+                const dnn = Math.max(Math.abs(pn.x - gnx), Math.abs(pn.y - gny), Math.abs(pn.z - gnz));
+                if (dpp > val.maxAbsError || dnn > val.maxAbsError) {
+                    lines.push(
+                        `  v${vi} cpuP(${pv.x.toFixed(5)},${pv.y.toFixed(5)},${pv.z.toFixed(5)}) gpuP(${gpx.toFixed(5)},${gpy.toFixed(5)},${gpz.toFixed(5)}) cpuN(${pn.x.toFixed(5)},${pn.y.toFixed(5)},${pn.z.toFixed(5)}) gpuN(${gnx.toFixed(5)},${gny.toFixed(5)},${gnz.toFixed(5)}) maxΔp=${dpp.toExponential(3)} maxΔn=${dnn.toExponential(3)}`,
+                    );
+                    logged++;
+                }
+            }
+            const msg =
+                `[MooShowStage pipeline validation] body ${bi} mesh ${meshIndex}: mismatches pos=${summary.positions.mismatchCount} norm=${summary.normals.mismatchCount} maxAbs pos=${summary.positions.maxAbsDiff.toExponential(3)} norm=${summary.normals.maxAbsDiff.toExponential(3)} firstVertex=${firstV}\n` +
+                lines.join('\n');
+            console.warn(msg);
+            if (val.throwOnMismatch) throw new Error(msg);
+        } else if (this._verbose) {
+            console.log('[MooShowStage pipeline validation] OK', {
+                body: bi,
+                mesh: meshIndex,
+                maxAbsPos: summary.positions.maxAbsDiff,
+                maxAbsNorm: summary.normals.maxAbsDiff,
+            });
+        }
+    }
+
     private async _updateHoverAtClient(clientX: number, clientY: number): Promise<void> {
         const renderer = await this._getRenderer();
         if (!renderer || this._bodies.length === 0) return;
@@ -510,6 +672,27 @@ export class MooShowStage {
     private async _renderFrame(): Promise<void> {
         const renderer = await this._getRenderer();
         if (!renderer) return;
+
+        this._gpuCapsCache = renderer.getGpuCharacterPipelineCaps();
+        for (const w of gpuStageFallbackWarnings(this._characterPipeline, this._gpuCapsCache)) {
+            this._logPipelineFallbackOnce(w, w);
+        }
+        this._validateDeformThisFrame =
+            this._pipelineValidation.enabled &&
+            this._pipelineValidation.compareDeformation &&
+            (++this._validationFrameCounter % Math.max(1, this._pipelineValidation.everyNFrames)) === 0;
+        if (this._validateDeformThisFrame) {
+            const defEff = effectivePipelineBackend(
+                this._characterPipeline.deformation,
+                this._gpuCapsCache.deformation,
+            );
+            if (defEff !== 'gpu') {
+                this._logPipelineFallbackOnce(
+                    'validation-needs-gpu-deformation',
+                    'pipeline validation compareDeformation is on but deformation is not running on GPU (set characterPipeline.deformation to "gpu" and implement Renderer.readbackDeformedMeshForValidation); skipping compare.',
+                );
+            }
+        }
 
         const slice = this._effectiveDebugSlice();
         (renderer as RendererWithDebug).setDebugSlice(slice);
@@ -560,6 +743,7 @@ export class MooShowStage {
                         });
                         verts = deformed.vertices;
                         norms = deformed.normals;
+                        await this._maybeValidateDeformation(renderer, bi, meshIndex, verts, norms);
                     } else {
                         verts = mesh.vertices;
                         norms = mesh.normals;
