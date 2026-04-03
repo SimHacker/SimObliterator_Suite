@@ -64,6 +64,7 @@ export { GpuMeshCache } from './gpu-mesh-cache.js';
 export type { CachedMeshGpuData } from './gpu-mesh-cache.js';
 
 export { GpuDeformer } from './gpu-deformer.js';
+export { GpuUniformPool, GpuVertexBufferPool } from './gpu-buffer-pool.js';
 export {
     Renderer,
     ObjectIdType,

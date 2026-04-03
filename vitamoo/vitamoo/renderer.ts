@@ -11,6 +11,7 @@ import { defaultGpuCharacterPipelineCaps } from './character-pipeline.js';
 import { GpuMeshCache } from './gpu-mesh-cache.js';
 import type { CachedMeshGpuData } from './gpu-mesh-cache.js';
 import { GpuDeformer } from './gpu-deformer.js';
+import { GpuUniformPool, GpuVertexBufferPool } from './gpu-buffer-pool.js';
 import type {
     GpuInstrumentationCallbacks,
     GpuResourceAllocatedEvent,
@@ -468,6 +469,9 @@ export class Renderer {
 
     private meshCache: GpuMeshCache | null = null;
     private gpuDeformer: GpuDeformer | null = null;
+    private meshUniformPool: GpuUniformPool | null = null;
+    private pickUniformPool: GpuUniformPool | null = null;
+    private vertexPool: GpuVertexBufferPool | null = null;
 
     private currentEncoder: GPUCommandEncoder | null = null;
     private currentPass: GPURenderPassEncoder | null = null;
@@ -705,6 +709,9 @@ export class Renderer {
 
         this.meshCache = new GpuMeshCache(this.device, this.queue, this.options.instrumentation);
         this.gpuDeformer = new GpuDeformer(this.device, this.options.instrumentation);
+        this.meshUniformPool = new GpuUniformPool(this.device, UNIFORM_SIZE, 'mesh-uniform', 32);
+        this.pickUniformPool = new GpuUniformPool(this.device, PICK_DEBUG_UNIFORM_SIZE, 'pick-uniform', 32);
+        this.vertexPool = new GpuVertexBufferPool(this.device, 'draw-vertex');
     }
 
     /** GPU-resident static mesh data. Null before init. */
@@ -822,6 +829,9 @@ export class Renderer {
             for (const b of this.buffersToDestroy) b.destroy();
             this.buffersToDestroy.length = 0;
         }
+        this.meshUniformPool?.resetFrame();
+        this.pickUniformPool?.resetFrame();
+        this.vertexPool?.resetFrame();
     }
 
     private _beginPass(clearColor: GPUColor | null): void {
@@ -1110,12 +1120,7 @@ export class Renderer {
                 solid: view.getUint32(U_MESH_SOLID, true),
             });
         }
-        // Fresh uniform buffers per draw: all queue.writeBuffer calls for a frame are ordered before
-        // queue.submit(encoder); a single shared buffer would leave every draw seeing the last write.
-        const meshUniformBuffer = this.device.createBuffer({
-            size: UNIFORM_SIZE,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
+        const meshUniformBuffer = this.meshUniformPool!.acquire();
         this.queue.writeBuffer(meshUniformBuffer, 0, uniformData);
 
         const pickDbg = new ArrayBuffer(16);
@@ -1124,10 +1129,7 @@ export class Renderer {
         pdv.setUint32(4, (objectId?.type ?? 0) >>> 0, true);
         pdv.setUint32(8, (objectId?.objectId ?? 0) >>> 0, true);
         pdv.setUint32(12, (objectId?.subObjectId ?? 0) >>> 0, true);
-        const pickUniformBuffer = this.device.createBuffer({
-            size: PICK_DEBUG_UNIFORM_SIZE,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
+        const pickUniformBuffer = this.pickUniformPool!.acquire();
         this.queue.writeBuffer(pickUniformBuffer, 0, pickDbg);
 
         const texToUse = texToBind ?? this.dummyTexture;
@@ -1146,10 +1148,7 @@ export class Renderer {
             ? (this.cullingEnabled ? this.meshPipeline : this.meshPipelineNoCull)
             : (this.cullingEnabled ? this.meshPipelineSingle : this.meshPipelineNoCullSingle);
 
-        const vb = this.device.createBuffer({
-            size: interleaved.byteLength,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
+        const vb = this.vertexPool!.acquire(interleaved.byteLength);
         this.queue.writeBuffer(vb, 0, interleaved);
 
         this.currentPass!.setPipeline(meshPipe);
@@ -1159,7 +1158,6 @@ export class Renderer {
         if (cached) {
             this.currentPass!.setIndexBuffer(cached.indexBuffer, cached.useUint32Index ? 'uint32' : 'uint16');
             this.currentPass!.drawIndexed(cached.indexCount);
-            this.buffersToDestroy.push(meshUniformBuffer, pickUniformBuffer, vb);
         } else {
             const indexData: number[] = [];
             for (const face of mesh.faces) {
@@ -1172,7 +1170,7 @@ export class Renderer {
             this.queue.writeBuffer(ib, 0, new Uint16Array(indexData));
             this.currentPass!.setIndexBuffer(ib, 'uint16');
             this.currentPass!.drawIndexed(indexData.length);
-            this.buffersToDestroy.push(meshUniformBuffer, pickUniformBuffer, vb, ib);
+            this.buffersToDestroy.push(ib);
         }
     }
 
