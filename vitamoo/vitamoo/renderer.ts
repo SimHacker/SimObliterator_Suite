@@ -8,6 +8,8 @@ import type {
     DeformedMeshReadbackResult,
 } from './character-pipeline.js';
 import { defaultGpuCharacterPipelineCaps } from './character-pipeline.js';
+import { GpuMeshCache } from './gpu-mesh-cache.js';
+import type { CachedMeshGpuData } from './gpu-mesh-cache.js';
 import type {
     GpuInstrumentationCallbacks,
     GpuResourceAllocatedEvent,
@@ -463,6 +465,8 @@ export class Renderer {
     /** True only while `drawDiamond` calls `drawMesh` — fadeColor is lit tint; elsewhere fadeColor stays sentinel. */
     private meshSolidVertexPass = false;
 
+    private meshCache: GpuMeshCache | null = null;
+
     private currentEncoder: GPUCommandEncoder | null = null;
     private currentPass: GPURenderPassEncoder | null = null;
     private currentTexture: GPUTexture | null = null;
@@ -696,6 +700,13 @@ export class Renderer {
                 depthCompare: 'always',
             },
         });
+
+        this.meshCache = new GpuMeshCache(this.device, this.queue, this.options.instrumentation);
+    }
+
+    /** GPU-resident static mesh data. Null before init. */
+    getMeshCache(): GpuMeshCache | null {
+        return this.meshCache;
     }
 
     setViewport(x: number, y: number, w: number, h: number): void {
@@ -986,28 +997,7 @@ export class Renderer {
     ): void {
         if (!this.currentPass) this._beginPass(null);
 
-        const posData: number[] = [];
-        const normData: number[] = [];
-        const uvData: number[] = [];
-        const indexData: number[] = [];
-
-        for (let i = 0; i < vertices.length; i++) {
-            const v = vertices[i];
-            const n = normals[i];
-            const uv = meshVertexUv(mesh, i);
-            if (v && n) {
-                posData.push(v.x, v.y, v.z);
-                normData.push(n.x, n.y, n.z);
-                uvData.push(uv.x, uv.y);
-            } else {
-                posData.push(0, 0, 0);
-                normData.push(0, 1, 0);
-                uvData.push(0, 0);
-            }
-        }
-        for (const face of mesh.faces) {
-            indexData.push(face.a, face.b, face.c);
-        }
+        const cached = this.meshCache?.getOrCreate(mesh);
 
         const textureValid = texture != null && typeof (texture as GPUTexture).createView === 'function';
         if (!textureValid && texture != null) {
@@ -1015,29 +1005,35 @@ export class Renderer {
         }
         const texToBind = textureValid ? texture! : null;
 
+        const vertexCount = vertices.length;
+
         if (this.verbose && !Renderer.loggedMeshes.has(mesh.name)) {
             Renderer.loggedMeshes.add(mesh.name);
-            const maxIdx = vertices.length - 1;
-            const badIndices = indexData.filter((i) => i < 0 || i > maxIdx);
             const uvCount = mesh.uvs?.length ?? 0;
-            const allZeroUv = uvCount > 0 && uvData.every((v, i) => v === 0);
-            const uvHint = uvCount === 0 ? 'no uvs' : allZeroUv ? 'uvs all zero' : 'uvs ok';
+            const uvHint = uvCount === 0 ? 'no uvs' : 'uvs ok';
             console.log(
-                `[drawMesh] "${mesh.name}" verts=${vertices.length} tris=${mesh.faces.length} hasTex=${!!texToBind} ${uvHint} badIndices=${badIndices.length}`,
+                `[drawMesh] "${mesh.name}" verts=${vertexCount} tris=${mesh.faces.length} hasTex=${!!texToBind} ${uvHint} cached=${!!cached}`,
             );
         }
 
-        const vertexCount = posData.length / 3;
         const interleaved = new Float32Array(vertexCount * 8);
         for (let i = 0; i < vertexCount; i++) {
-            interleaved[i * 8 + 0] = posData[i * 3];
-            interleaved[i * 8 + 1] = posData[i * 3 + 1];
-            interleaved[i * 8 + 2] = posData[i * 3 + 2];
-            interleaved[i * 8 + 3] = normData[i * 3];
-            interleaved[i * 8 + 4] = normData[i * 3 + 1];
-            interleaved[i * 8 + 5] = normData[i * 3 + 2];
-            interleaved[i * 8 + 6] = uvData[i * 2];
-            interleaved[i * 8 + 7] = uvData[i * 2 + 1];
+            const v = vertices[i];
+            const n = normals[i];
+            const uv = meshVertexUv(mesh, i);
+            if (v && n) {
+                interleaved[i * 8 + 0] = v.x;
+                interleaved[i * 8 + 1] = v.y;
+                interleaved[i * 8 + 2] = v.z;
+                interleaved[i * 8 + 3] = n.x;
+                interleaved[i * 8 + 4] = n.y;
+                interleaved[i * 8 + 5] = n.z;
+            } else {
+                interleaved[i * 8 + 1] = 0;
+                interleaved[i * 8 + 4] = 1;
+            }
+            interleaved[i * 8 + 6] = uv.x;
+            interleaved[i * 8 + 7] = uv.y;
         }
         const uniformData = new ArrayBuffer(UNIFORM_SIZE);
         const view = new DataView(uniformData);
@@ -1143,18 +1139,29 @@ export class Renderer {
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
         this.queue.writeBuffer(vb, 0, interleaved);
-        const ib = this.device.createBuffer({
-            size: indexData.length * 2,
-            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
-        });
-        this.queue.writeBuffer(ib, 0, new Uint16Array(indexData));
 
         this.currentPass!.setPipeline(meshPipe);
         this.currentPass!.setBindGroup(0, meshBindGroup);
         this.currentPass!.setVertexBuffer(0, vb);
-        this.currentPass!.setIndexBuffer(ib, 'uint16');
-        this.currentPass!.drawIndexed(indexData.length);
-        this.buffersToDestroy.push(meshUniformBuffer, pickUniformBuffer, vb, ib);
+
+        if (cached) {
+            this.currentPass!.setIndexBuffer(cached.indexBuffer, cached.useUint32Index ? 'uint32' : 'uint16');
+            this.currentPass!.drawIndexed(cached.indexCount);
+            this.buffersToDestroy.push(meshUniformBuffer, pickUniformBuffer, vb);
+        } else {
+            const indexData: number[] = [];
+            for (const face of mesh.faces) {
+                indexData.push(face.a, face.b, face.c);
+            }
+            const ib = this.device.createBuffer({
+                size: indexData.length * 2,
+                usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+            });
+            this.queue.writeBuffer(ib, 0, new Uint16Array(indexData));
+            this.currentPass!.setIndexBuffer(ib, 'uint16');
+            this.currentPass!.drawIndexed(indexData.length);
+            this.buffersToDestroy.push(meshUniformBuffer, pickUniformBuffer, vb, ib);
+        }
     }
 
     drawDiamond(

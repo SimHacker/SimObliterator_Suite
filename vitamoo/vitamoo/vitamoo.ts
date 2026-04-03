@@ -52,6 +52,9 @@ export {
     DEFORMED_VERTEX_FLOATS,
 } from './pipeline-buffer.js';
 export type { PipelineBufferAuthority, PipelineBufferOptions } from './pipeline-buffer.js';
+
+export { GpuMeshCache } from './gpu-mesh-cache.js';
+export type { CachedMeshGpuData } from './gpu-mesh-cache.js';
 export {
     Renderer,
     ObjectIdType,
