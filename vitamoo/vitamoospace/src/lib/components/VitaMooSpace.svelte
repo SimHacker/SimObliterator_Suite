@@ -8,6 +8,7 @@
 		type CharacterDef,
 		type KeyAction,
 	} from 'mooshow';
+	import DebugPanel from './DebugPanel.svelte';
 
 	const SKILL_BLACKLIST = [
 		'twiststart',
@@ -78,6 +79,7 @@
 	let loadText = $state('Loading VitaMoo...');
 	let overlayDone = $state(false);
 	let helpOpen = $state(false);
+	let debugOpen = $state(false);
 
 	let scenesList = $state<{ name: string }[]>([]);
 	let charactersList = $state<CharacterDef[]>([]);
@@ -322,7 +324,13 @@
 	}
 
 	function toggleHelp() {
+		if (debugOpen) debugOpen = false;
 		helpOpen = !helpOpen;
+	}
+
+	function toggleDebug() {
+		if (helpOpen) helpOpen = false;
+		debugOpen = !debugOpen;
 	}
 
 	function handleKeyAction(s: MooShowStage, action: KeyAction, value?: number) {
@@ -360,6 +368,9 @@
 				break;
 			case 'toggleHelp':
 				toggleHelp();
+				break;
+			case 'toggleDebug':
+				toggleDebug();
 				break;
 			default:
 				break;
@@ -705,8 +716,8 @@
 				<button
 					type="button"
 					id="btnHelp"
-					title="Help (H)"
-					onclick={toggleHelp}>Help?!?</button
+					title="Help (H) / Shift+click for Debug (Ctrl+Shift+C)"
+					onclick={(e) => { if (e.shiftKey) toggleDebug(); else toggleHelp(); }}>Help?!?</button
 				>
 			</div>
 		</div>
@@ -747,6 +758,8 @@
 			</p>
 		</div>
 	</div>
+
+	<DebugPanel stage={stageRef} open={debugOpen} onClose={toggleDebug} />
 
 	{#if !uiReady && !errorMsg}
 		<div id="loadingOverlay" class:done={overlayDone}>

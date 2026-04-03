@@ -1012,6 +1012,12 @@ export class MooShowStage {
             if (e.key === '?' || e.key === 'h') { this.hooks.onKeyAction?.('toggleHelp'); e.preventDefault(); }
             if (e.key === 'Escape') { this.hooks.onKeyAction?.('toggleHelp'); e.preventDefault(); }
 
+            if (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+                this.hooks.onKeyAction?.('toggleDebug');
+                e.preventDefault();
+                return;
+            }
+
             if (e.key === 'n') { this.hooks.onKeyAction?.('stepSceneNext'); e.preventDefault(); }
             if (e.key === 'p') { this.hooks.onKeyAction?.('stepScenePrev'); e.preventDefault(); }
             if (e.key === 'a') { this.hooks.onKeyAction?.('stepActorPrev'); e.preventDefault(); }

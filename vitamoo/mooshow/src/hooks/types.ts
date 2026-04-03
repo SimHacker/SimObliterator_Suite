@@ -3,7 +3,7 @@ export type KeyAction =
     | 'stepActorNext' | 'stepActorPrev'
     | 'stepCharacterNext' | 'stepCharacterPrev'
     | 'stepAnimationNext' | 'stepAnimationPrev'
-    | 'togglePause' | 'toggleHelp'
+    | 'togglePause' | 'toggleHelp' | 'toggleDebug'
     | 'setSpeed';
 
 export interface MooShowHooks {
