@@ -37,6 +37,8 @@ export interface CachedMeshGpuData {
     blendBindings: GPUBuffer;
     blendBindingCount: number;
     boundVertexCount: number;
+    /** Pre-allocated output buffer for GPU deformation (6 floats/vertex). Reused every frame. */
+    deformedOutput: GPUBuffer;
 }
 
 /** 5 uint32 per bone binding: boneIndex, firstVertex, vertexCount, firstBlendedVertex, blendedVertexCount */
@@ -162,6 +164,13 @@ export class GpuMeshCache {
         const blendBindingsBuffer = this._createBufferSized(`mesh-blend-bind:${label}`, minBlSize, GPUBufferUsage.STORAGE);
         if (blData.byteLength > 0) this.queue.writeBuffer(blendBindingsBuffer, 0, blData);
 
+        const deformedByteSize = Math.max(vertexCount * 6 * 4, 16);
+        const deformedOutput = this._createBufferSized(
+            `mesh-deformed:${label}`,
+            deformedByteSize,
+            GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_SRC,
+        );
+
         return {
             uvBuffer,
             indexBuffer,
@@ -175,6 +184,7 @@ export class GpuMeshCache {
             blendBindings: blendBindingsBuffer,
             blendBindingCount,
             boundVertexCount,
+            deformedOutput,
         };
     }
 
@@ -218,6 +228,7 @@ export class GpuMeshCache {
             ['rest-norm', entry.restNormals],
             ['bone-bind', entry.boneBindings],
             ['blend-bind', entry.blendBindings],
+            ['deformed', entry.deformedOutput],
         ];
         for (const [suffix, buf] of buffers) {
             buf.destroy();

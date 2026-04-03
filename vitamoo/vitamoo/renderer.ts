@@ -1331,22 +1331,21 @@ export class Renderer {
      *
      * The returned buffer is owned by the caller and must be destroyed after the frame.
      */
+    /**
+     * Run GPU compute deformation for a mesh. Returns the persistent deformed output buffer
+     * from the mesh cache (6 floats/vertex: px py pz nx ny nz). The buffer is reused every
+     * frame — do not destroy it.
+     */
     deformMeshGpu(
         mesh: MeshData,
         boneTransformBuffer: GPUBuffer,
     ): GPUBuffer | null {
         if (!this.gpuDeformer || !this.meshCache) return null;
         const cached = this.meshCache.getOrCreate(mesh);
-        const byteSize = cached.vertexCount * 6 * 4;
-        const outputBuffer = this.device.createBuffer({
-            label: `deformed:${mesh.name}`,
-            size: Math.max(byteSize, 16),
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_SRC,
-        });
         const encoder = this.device.createCommandEncoder();
-        this.gpuDeformer.encode(encoder, cached, boneTransformBuffer, outputBuffer);
+        this.gpuDeformer.encode(encoder, cached, boneTransformBuffer, cached.deformedOutput);
         this.queue.submit([encoder.finish()]);
-        return outputBuffer;
+        return cached.deformedOutput;
     }
 
     /**

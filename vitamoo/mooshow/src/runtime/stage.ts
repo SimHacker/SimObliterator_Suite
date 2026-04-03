@@ -138,7 +138,6 @@ export class MooShowStage {
     private _validationFrameCounter = 0;
     private _validateDeformThisFrame = false;
     private _boneTransformBuffers = new Map<number, PipelineBuffer>();
-    private _deformedBuffersToDestroy: GPUBuffer[] = [];
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
@@ -684,7 +683,7 @@ export class MooShowStage {
                     if (body.skeleton && deformBackend === 'gpu' && boneGpuBuffer) {
                         gpuDeformedBuffer = renderer.deformMeshGpu(mesh, boneGpuBuffer);
                         if (gpuDeformedBuffer) {
-                            this._deformedBuffersToDestroy.push(gpuDeformedBuffer);
+                            // deformedOutput is persistent in the mesh cache — no destroy needed
                         }
                     }
 
@@ -820,8 +819,7 @@ export class MooShowStage {
 
         renderer.endFrame();
 
-        for (const buf of this._deformedBuffersToDestroy) buf.destroy();
-        this._deformedBuffersToDestroy.length = 0;
+        // Deformed output buffers are persistent in the mesh cache — nothing to destroy per frame.
     }
 
     private _computeCameraTarget(skeleton: any[] | null): void {
