@@ -111,12 +111,64 @@ export interface DeformedMeshReadbackResult {
     vertexCount: number;
 }
 
+/**
+ * An inspection tap captures the output of a pipeline step into a CPU-side
+ * Float32Array for comparison. One set of working buffers flows through the
+ * pipeline; taps are optional snapshots taken after a step runs.
+ *
+ * When non-null, the pipeline runner copies the working buffer's contents
+ * into the tap after the step completes. The same working buffer is then
+ * reused for the next step (or the alternate backend for comparison).
+ */
+export interface InspectionTap {
+    /** Captured data. Resized automatically to match the working buffer. */
+    data: Float32Array;
+    /** True if data was captured this frame. */
+    captured: boolean;
+}
+
+export function createInspectionTap(floatCount: number): InspectionTap {
+    return { data: new Float32Array(floatCount), captured: false };
+}
+
+export function resizeInspectionTap(tap: InspectionTap, floatCount: number): void {
+    if (tap.data.length !== floatCount) {
+        tap.data = new Float32Array(floatCount);
+    }
+    tap.captured = false;
+}
+
+export function captureInspectionTap(tap: InspectionTap, source: Float32Array): void {
+    if (tap.data.length !== source.length) {
+        tap.data = new Float32Array(source.length);
+    }
+    tap.data.set(source);
+    tap.captured = true;
+}
+
+/** Per-stage inspection taps for CPU and GPU outputs. */
+export interface PipelineInspectionTaps {
+    deformationCpu: InspectionTap | null;
+    deformationGpu: InspectionTap | null;
+    animationCpu: InspectionTap | null;
+    animationGpu: InspectionTap | null;
+}
+
+export function defaultPipelineInspectionTaps(): PipelineInspectionTaps {
+    return {
+        deformationCpu: null,
+        deformationGpu: null,
+        animationCpu: null,
+        animationGpu: null,
+    };
+}
+
 export interface PipelineValidationSettings {
     enabled: boolean;
-    /** Future: compare GPU-evaluated poses to CPU `updateTransforms` / Practice. */
-    compareAnimation: boolean;
-    /** Compare GPU deformation readback to CPU `deformMesh` output. */
+    /** Run CPU deformation even when gpu is the active backend, capture to tap, and compare. */
     compareDeformation: boolean;
+    /** Run CPU animation even when gpu is active, capture to tap, and compare. */
+    compareAnimation: boolean;
     maxAbsError: number;
     /** Cap console spam per mesh per frame. */
     maxLoggedVertices: number;
@@ -142,6 +194,34 @@ export function mergePipelineValidationSettings(
     partial?: Partial<PipelineValidationSettings>,
 ): PipelineValidationSettings {
     return { ...defaultPipelineValidationSettings(), ...partial };
+}
+
+/**
+ * Compare two Float32Array inspection taps with the same interleaved layout.
+ * Both must be DEFORMED_MESH_FLOATS_PER_VERTEX (6) floats per vertex.
+ */
+export function compareInspectionTaps(
+    a: Float32Array,
+    b: Float32Array,
+    epsilon: number,
+): { maxAbsDiff: number; mismatchCount: number; firstMismatchIndex: number } {
+    let maxAbsDiff = 0;
+    let mismatchCount = 0;
+    let firstMismatchIndex = -1;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+        const d = Math.abs(a[i] - b[i]);
+        if (d > maxAbsDiff) maxAbsDiff = d;
+        if (d > epsilon) {
+            mismatchCount++;
+            if (firstMismatchIndex < 0) firstMismatchIndex = i;
+        }
+    }
+    if (a.length !== b.length) {
+        mismatchCount += Math.abs(a.length - b.length);
+        if (firstMismatchIndex < 0) firstMismatchIndex = n;
+    }
+    return { maxAbsDiff, mismatchCount, firstMismatchIndex };
 }
 
 export interface Float32BatchCompareResult {
