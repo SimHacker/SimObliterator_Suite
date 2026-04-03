@@ -10,14 +10,22 @@ import {
     mergePipelineValidationSettings,
     effectivePipelineBackend,
     gpuStageFallbackWarnings,
-    compareDeformedMeshCpuVsGpuInterleaved,
+    compareInspectionTaps,
     defaultGpuCharacterPipelineCaps,
+    packBoneTransforms,
+    createBoneTransformBuffer,
+    packDeformedMesh,
+    createDeformedMeshBuffer,
+    DEFORMED_VERTEX_FLOATS,
+    BONE_TRANSFORM_FLOATS,
 } from 'vitamoo';
 import type {
     CharacterPipelineStages,
     PipelineValidationSettings,
     GpuCharacterPipelineCaps,
     GpuInstrumentationCallbacks,
+    PipelineBuffer,
+    InspectionTap,
 } from 'vitamoo';
 
 type ResolvedRenderer = Awaited<ReturnType<typeof Renderer.create>> | null;
@@ -129,6 +137,8 @@ export class MooShowStage {
     private readonly _pipelineFallbackKeys = new Set<string>();
     private _validationFrameCounter = 0;
     private _validateDeformThisFrame = false;
+    private _boneTransformBuffers = new Map<number, PipelineBuffer>();
+    private _deformedBuffersToDestroy: GPUBuffer[] = [];
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
@@ -573,82 +583,6 @@ export class MooShowStage {
         }
     }
 
-    private async _maybeValidateDeformation(
-        renderer: NonNullable<ResolvedRenderer>,
-        bi: number,
-        meshIndex: number,
-        cpuVerts: Vec3[],
-        cpuNorms: Vec3[],
-    ): Promise<void> {
-        if (!this._validateDeformThisFrame) return;
-        const val = this._pipelineValidation;
-        if (!val.compareDeformation) return;
-        const defEff = effectivePipelineBackend(
-            this._characterPipeline.deformation,
-            this._gpuCapsCache.deformation,
-        );
-        if (defEff !== 'gpu') return;
-        const readback = await renderer.readbackDeformedMeshForValidation({
-            bodyIndex: bi,
-            meshIndex,
-            vertexCount: cpuVerts.length,
-        });
-        if (!readback) {
-            this._logPipelineFallbackOnce(
-                'validation-readback-null',
-                'pipeline validation: GPU deformation readback is null (GPU deformation not implemented); no comparison.',
-            );
-            return;
-        }
-        const summary = compareDeformedMeshCpuVsGpuInterleaved(
-            cpuVerts,
-            cpuNorms,
-            readback.data,
-            val.maxAbsError,
-        );
-        const bad = summary.positions.mismatchCount + summary.normals.mismatchCount;
-        if (bad > 0) {
-            const firstV =
-                summary.positions.firstMismatchVertex >= 0
-                    ? summary.positions.firstMismatchVertex
-                    : summary.normals.firstMismatchVertex;
-            let logged = 0;
-            const cap = val.maxLoggedVertices;
-            const lines: string[] = [];
-            for (let vi = 0; vi < cpuVerts.length && logged < cap; vi++) {
-                const o = vi * 6;
-                const pv = cpuVerts[vi];
-                const pn = cpuNorms[vi];
-                const gpx = readback.data[o];
-                const gpy = readback.data[o + 1];
-                const gpz = readback.data[o + 2];
-                const gnx = readback.data[o + 3];
-                const gny = readback.data[o + 4];
-                const gnz = readback.data[o + 5];
-                const dpp = Math.max(Math.abs(pv.x - gpx), Math.abs(pv.y - gpy), Math.abs(pv.z - gpz));
-                const dnn = Math.max(Math.abs(pn.x - gnx), Math.abs(pn.y - gny), Math.abs(pn.z - gnz));
-                if (dpp > val.maxAbsError || dnn > val.maxAbsError) {
-                    lines.push(
-                        `  v${vi} cpuP(${pv.x.toFixed(5)},${pv.y.toFixed(5)},${pv.z.toFixed(5)}) gpuP(${gpx.toFixed(5)},${gpy.toFixed(5)},${gpz.toFixed(5)}) cpuN(${pn.x.toFixed(5)},${pn.y.toFixed(5)},${pn.z.toFixed(5)}) gpuN(${gnx.toFixed(5)},${gny.toFixed(5)},${gnz.toFixed(5)}) maxΔp=${dpp.toExponential(3)} maxΔn=${dnn.toExponential(3)}`,
-                    );
-                    logged++;
-                }
-            }
-            const msg =
-                `[MooShowStage pipeline validation] body ${bi} mesh ${meshIndex}: mismatches pos=${summary.positions.mismatchCount} norm=${summary.normals.mismatchCount} maxAbs pos=${summary.positions.maxAbsDiff.toExponential(3)} norm=${summary.normals.maxAbsDiff.toExponential(3)} firstVertex=${firstV}\n` +
-                lines.join('\n');
-            console.warn(msg);
-            if (val.throwOnMismatch) throw new Error(msg);
-        } else if (this._verbose) {
-            console.log('[MooShowStage pipeline validation] OK', {
-                body: bi,
-                mesh: meshIndex,
-                maxAbsPos: summary.positions.maxAbsDiff,
-                maxAbsNorm: summary.normals.maxAbsDiff,
-            });
-        }
-    }
-
     private async _updateHoverAtClient(clientX: number, clientY: number): Promise<void> {
         const renderer = await this._getRenderer();
         if (!renderer || this._bodies.length === 0) return;
@@ -681,19 +615,6 @@ export class MooShowStage {
             this._pipelineValidation.enabled &&
             this._pipelineValidation.compareDeformation &&
             (++this._validationFrameCounter % Math.max(1, this._pipelineValidation.everyNFrames)) === 0;
-        if (this._validateDeformThisFrame) {
-            const defEff = effectivePipelineBackend(
-                this._characterPipeline.deformation,
-                this._gpuCapsCache.deformation,
-            );
-            if (defEff !== 'gpu') {
-                this._logPipelineFallbackOnce(
-                    'validation-needs-gpu-deformation',
-                    'pipeline validation compareDeformation is on but deformation is not running on GPU (set characterPipeline.deformation to "gpu" and implement Renderer.readbackDeformedMeshForValidation); skipping compare.',
-                );
-            }
-        }
-
         const slice = this._effectiveDebugSlice();
         (renderer as RendererWithDebug).setDebugSlice(slice);
 
@@ -733,20 +654,73 @@ export class MooShowStage {
             const bodyDir = spinDeg * Math.PI / 180;
             const cosD = Math.cos(bodyDir);
             const sinD = Math.sin(bodyDir);
+            const deformBackend = effectivePipelineBackend(
+                this._characterPipeline.deformation,
+                this._gpuCapsCache.deformation,
+            );
+            let boneGpuBuffer: GPUBuffer | null = null;
+            if (body.skeleton && deformBackend === 'gpu') {
+                let btBuf = this._boneTransformBuffers.get(bi);
+                if (!btBuf || btBuf.floatCount < body.skeleton.length * BONE_TRANSFORM_FLOATS) {
+                    btBuf?.destroy();
+                    btBuf = createBoneTransformBuffer(
+                        body.skeleton.length,
+                        `bones-body${bi}`,
+                        this._gpuInstrumentation,
+                    );
+                    this._boneTransformBuffers.set(bi, btBuf);
+                }
+                packBoneTransforms(body.skeleton, btBuf.cpu);
+                btBuf.cpuDidWrite();
+                boneGpuBuffer = btBuf.ensureGpu(renderer.getDevice(), renderer.getQueue());
+            }
+
             let meshIndex = 0;
             for (const { mesh, boneMap, texture } of body.meshes) {
                 try {
                     let verts: any[], norms: any[];
+                    let gpuDeformedBuffer: GPUBuffer | null = null;
+
+                    if (body.skeleton && deformBackend === 'gpu' && boneGpuBuffer) {
+                        gpuDeformedBuffer = renderer.deformMeshGpu(mesh, boneGpuBuffer);
+                        if (gpuDeformedBuffer) {
+                            this._deformedBuffersToDestroy.push(gpuDeformedBuffer);
+                        }
+                    }
+
                     if (body.skeleton) {
                         const deformed = deformMesh(mesh, body.skeleton, boneMap, {
                             verbose: this._verbose,
                         });
                         verts = deformed.vertices;
                         norms = deformed.normals;
-                        await this._maybeValidateDeformation(renderer, bi, meshIndex, verts, norms);
                     } else {
                         verts = mesh.vertices;
                         norms = mesh.normals;
+                    }
+
+                    if (this._validateDeformThisFrame && gpuDeformedBuffer && body.skeleton) {
+                        const readback = await renderer.readbackDeformedMeshForValidation(
+                            { bodyIndex: bi, meshIndex, vertexCount: verts.length },
+                            gpuDeformedBuffer,
+                        );
+                        if (readback) {
+                            const cpuPacked = new Float32Array(verts.length * DEFORMED_VERTEX_FLOATS);
+                            for (let vi = 0; vi < verts.length; vi++) {
+                                const o = vi * DEFORMED_VERTEX_FLOATS;
+                                const v = verts[vi]; const n = norms[vi];
+                                if (v) { cpuPacked[o] = v.x; cpuPacked[o + 1] = v.y; cpuPacked[o + 2] = v.z; }
+                                if (n) { cpuPacked[o + 3] = n.x; cpuPacked[o + 4] = n.y; cpuPacked[o + 5] = n.z; }
+                            }
+                            const cmp = compareInspectionTaps(cpuPacked, readback.data, this._pipelineValidation.maxAbsError);
+                            if (cmp.mismatchCount > 0) {
+                                const msg = `[pipeline validation] body ${bi} mesh ${meshIndex} "${mesh.name}": ${cmp.mismatchCount} mismatches, maxAbsDiff=${cmp.maxAbsDiff.toExponential(3)}, firstAt float ${cmp.firstMismatchIndex}`;
+                                console.warn(msg);
+                                if (this._pipelineValidation.throwOnMismatch) throw new Error(msg);
+                            } else if (this._verbose) {
+                                console.log(`[pipeline validation] OK body ${bi} mesh ${meshIndex} "${mesh.name}" maxAbsDiff=${cmp.maxAbsDiff.toExponential(3)}`);
+                            }
+                        }
                     }
 
                     if (bTop.active) {
@@ -832,6 +806,9 @@ export class MooShowStage {
         }
 
         renderer.endFrame();
+
+        for (const buf of this._deformedBuffersToDestroy) buf.destroy();
+        this._deformedBuffersToDestroy.length = 0;
     }
 
     private _computeCameraTarget(skeleton: any[] | null): void {
