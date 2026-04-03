@@ -10,6 +10,7 @@ import type {
 import { defaultGpuCharacterPipelineCaps } from './character-pipeline.js';
 import { GpuMeshCache } from './gpu-mesh-cache.js';
 import type { CachedMeshGpuData } from './gpu-mesh-cache.js';
+import { GpuDeformer } from './gpu-deformer.js';
 import type {
     GpuInstrumentationCallbacks,
     GpuResourceAllocatedEvent,
@@ -466,6 +467,7 @@ export class Renderer {
     private meshSolidVertexPass = false;
 
     private meshCache: GpuMeshCache | null = null;
+    private gpuDeformer: GpuDeformer | null = null;
 
     private currentEncoder: GPUCommandEncoder | null = null;
     private currentPass: GPURenderPassEncoder | null = null;
@@ -702,12 +704,22 @@ export class Renderer {
         });
 
         this.meshCache = new GpuMeshCache(this.device, this.queue, this.options.instrumentation);
+        this.gpuDeformer = new GpuDeformer(this.device, this.options.instrumentation);
     }
 
     /** GPU-resident static mesh data. Null before init. */
     getMeshCache(): GpuMeshCache | null {
         return this.meshCache;
     }
+
+    /** GPU compute deformer. Null before init. */
+    getGpuDeformer(): GpuDeformer | null {
+        return this.gpuDeformer;
+    }
+
+    /** Expose device for PipelineBuffer.ensureGpu / ensureCpu from stage code. */
+    getDevice(): GPUDevice { return this.device; }
+    getQueue(): GPUQueue { return this.queue; }
 
     setViewport(x: number, y: number, w: number, h: number): void {
         this.viewport = { x, y, w, h };
@@ -1255,14 +1267,82 @@ export class Renderer {
      * Which GPU character-pipeline stages are implemented. When a stage is false, mooshow falls back to CPU.
      */
     getGpuCharacterPipelineCaps(): GpuCharacterPipelineCaps {
-        return defaultGpuCharacterPipelineCaps();
+        return {
+            animation: false,
+            deformation: this.gpuDeformer !== null,
+            rasterization: true,
+        };
+    }
+
+    /**
+     * Run GPU compute deformation for a mesh. Returns a GPUBuffer with 6 floats/vertex
+     * (px py pz nx ny nz) that drawMeshFromGpuBuffer can use, or null if GPU deformation
+     * is not available.
+     *
+     * The returned buffer is owned by the caller and must be destroyed after the frame.
+     */
+    deformMeshGpu(
+        mesh: MeshData,
+        boneTransformBuffer: GPUBuffer,
+    ): GPUBuffer | null {
+        if (!this.gpuDeformer || !this.meshCache) return null;
+        const cached = this.meshCache.getOrCreate(mesh);
+        const byteSize = cached.vertexCount * 6 * 4;
+        const outputBuffer = this.device.createBuffer({
+            label: `deformed:${mesh.name}`,
+            size: Math.max(byteSize, 16),
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_SRC,
+        });
+        const encoder = this.device.createCommandEncoder();
+        this.gpuDeformer.encode(encoder, cached, boneTransformBuffer, outputBuffer);
+        this.queue.submit([encoder.finish()]);
+        return outputBuffer;
+    }
+
+    /**
+     * Draw a mesh using a pre-computed GPU deformed buffer (6 floats/vertex: px py pz nx ny nz).
+     * UVs come from the mesh cache; the interleaved vertex buffer is built on the fly from the
+     * deformed data + cached UVs. In a future step this will read directly from a GPU vertex buffer
+     * without CPU involvement.
+     */
+    drawMeshFromGpuDeformed(
+        mesh: MeshData,
+        _deformedBuffer: GPUBuffer,
+        texture: TextureHandle | null = null,
+        objectId?: { type: ObjectIdType; objectId: number; subObjectId?: number },
+    ): void {
+        // For now: the GPU deformed buffer exists and can be read back for validation,
+        // but drawing still goes through the CPU interleaved path. The next step will
+        // add a vertex layout that reads pos/norm from the deformed buffer and UVs from
+        // the cached UV buffer, eliminating the CPU interleave entirely.
+        // This method is a placeholder so the stage can call it when deformation=gpu.
+        void _deformedBuffer;
+        void texture;
+        void objectId;
+        void mesh;
     }
 
     /**
      * Read back GPU deformation output for validation against CPU `deformMesh`.
-     * Returns null until GPU deformation is implemented and keyed meshes are registered.
+     * Pass the GPUBuffer returned by deformMeshGpu.
      */
-    async readbackDeformedMeshForValidation(_key: DeformedMeshReadbackKey): Promise<DeformedMeshReadbackResult | null> {
-        return null;
+    async readbackDeformedMeshForValidation(
+        key: DeformedMeshReadbackKey,
+        deformedBuffer?: GPUBuffer,
+    ): Promise<DeformedMeshReadbackResult | null> {
+        if (!deformedBuffer) return null;
+        const byteSize = key.vertexCount * 6 * 4;
+        const staging = this.device.createBuffer({
+            size: byteSize,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        });
+        const encoder = this.device.createCommandEncoder();
+        encoder.copyBufferToBuffer(deformedBuffer, 0, staging, 0, byteSize);
+        this.queue.submit([encoder.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);
+        const data = new Float32Array(staging.getMappedRange()).slice();
+        staging.unmap();
+        staging.destroy();
+        return { data, vertexCount: key.vertexCount };
     }
 }

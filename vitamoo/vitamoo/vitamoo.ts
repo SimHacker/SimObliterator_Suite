@@ -55,6 +55,8 @@ export type { PipelineBufferAuthority, PipelineBufferOptions } from './pipeline-
 
 export { GpuMeshCache } from './gpu-mesh-cache.js';
 export type { CachedMeshGpuData } from './gpu-mesh-cache.js';
+
+export { GpuDeformer } from './gpu-deformer.js';
 export {
     Renderer,
     ObjectIdType,
