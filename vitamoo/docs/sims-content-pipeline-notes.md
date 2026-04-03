@@ -204,3 +204,98 @@ VitaBoy also includes a `QuaternionNoise` generator based on Perlin noise, inten
 - [Updating applets (2025)](https://blog.kenperlin.com/?p=27980) — rewriting classic Java applets in JavaScript.
 - [Improv: A System for Scripting Interactive Actors in Virtual Worlds](https://mrl.cs.nyu.edu/~perlin/improv/) — Perlin & Goldberg, SIGGRAPH '96. The layered animation architecture that inspired VitaBoy.
 - [HN comment by DonHopkins](https://news.ycombinator.com/) — *"I learned a lot from his papers and demo code, and based the design of The Sims character animation system on his Improv project."*
+
+---
+
+## Coordinate systems, quaternion tricks, and glTF import gotchas
+
+Notes from the original CMX Exporter C++ source (`SimsKit/maxscript/CMXExporter.cpp`) that matter for anyone building tools (Blender addons, WebGPU shaders, glTF importers) that touch VitaMoo/VitaBoy data.
+
+### Coordinate system: already converted at export time
+
+3DS Max is **Z-up right-handed**. The Sims game is **Y-up**. The CMX Exporter converts at export time using `decomp_affine` on Max's `Matrix3` transforms. By the time data reaches CMX/SKN/CFP files, it is already in the game's coordinate system. VitaMoo's TypeScript parsers and WGSL shaders work in the game coordinate system directly — no axis swaps needed for Sims 1 content.
+
+**glTF** is **Y-up right-handed, +Z toward the viewer** (same handedness as the Sims game data, but the Z axis points the other direction from some conventions). When importing glTF into VitaMoo, the coordinate conversion happens in the glTF importer, not in the shaders or the deformation pipeline. This keeps the GPU path clean and format-agnostic.
+
+### `ExtractTransRot` — how bone-local transforms are computed
+
+```cpp
+// localMat is the difference between the bone and the node, with scaling.
+Matrix3 localMat = nodeMat * Inverse(boneMat);
+
+// Decompose both matrices into their affine parts.
+decomp_affine(boneMat, &boneParts);
+decomp_affine(localMat, &localParts);
+
+// Take out the scale factor from the translation.
+Point3 scale(boneParts.k.x, boneParts.k.y, boneParts.k.z);
+trans = localParts.t * scale;
+rot = localParts.q;
+```
+
+The exporter computes the relative transform from parent bone to child, strips scale (the Sims has no bone scaling — all scale is baked into the mesh at export), and stores translation + rotation. This is what ends up in CMX `Bone.position` and `Bone.rotation`, and what `updateTransforms` propagates.
+
+### `rot.MakeClosest(rotClosest)` — quaternion hemisphere continuity
+
+This is the single most important numerical trick in the animation export pipeline:
+
+```cpp
+rot = localParts.q;
+rot.MakeClosest(rotClosest);  // rotClosest = previous frame's rotation
+```
+
+A unit quaternion `q` and `-q` represent the same rotation. But when you interpolate (slerp or nlerp) between two quaternions, picking the wrong sign makes the interpolation take the long way around the sphere instead of the short way — causing the bone to spin 360 degrees minus the intended angle, or to snap discontinuously.
+
+`MakeClosest` flips `rot` to the same hemisphere as the previous frame's rotation (by checking `dot(rot, rotClosest) < 0` and negating all four components if so). The exporter does this for every bone at every frame before writing the animation data. This means the exported quaternion streams are **hemisphere-continuous** — safe to interpolate between adjacent frames without sign checks.
+
+**For tool developers:**
+
+- **Blender glTF export** does its own `MakeClosest` equivalent when writing animation channels, so glTF quaternion streams are usually hemisphere-safe. Verify this when importing — if you see snapping or 360-degree spins, the quaternions need a `MakeClosest` pass.
+- **VitaMoo's `Practice.tick`** uses `quatSlerp` which already handles the `dot < 0 → negate` case (see `skeleton.ts` / `types.ts`). But if you write a GPU animation evaluation shader, you need the same check: `if (dot(q0, q1) < 0) q1 = -q1` before nlerp/slerp.
+- **When recording animations** from VitaMoo (e.g. baking a long blended sequence to glTF), apply `MakeClosest` between consecutive frames before writing.
+
+### `TMToQuat` — matrix to quaternion conversion
+
+The exporter uses the Shepperd method with epsilon-guarded branches:
+
+1. Try `w = sqrt(0.25 * (1 + m11 + m22 + m33))` (trace > 0).
+2. If w is too small, fall back to whichever diagonal element (`m11`, `m22`, `m33`) is largest, and derive the other components from the off-diagonal elements.
+
+This avoids division-by-zero when a rotation is near 180 degrees. Standard technique, but worth knowing if you're writing your own `mat4 → quat` conversion for imported glTF data.
+
+### Biped bone name remapping
+
+The exporter canonicalizes Character Studio Biped bone names to shorter VitaBoy names:
+
+| Biped (new CS) | VitaBoy (exported) |
+|---------------|-------------------|
+| CALF | LEG1 |
+| THIGH | LEG |
+| UPPERARM | ARM1 |
+| FOREARM | ARM2 |
+| CLAVICLE | ARM |
+
+The root (`Bip01`) is renamed `ROOT` and the `Bip01 ` prefix is stripped from all bones. This remapping is baked into exported CMX files. VitaMoo's parsers see the already-remapped names.
+
+**For glTF import:** When importing a Blender skeleton intended for VitaMoo, either name the bones using the VitaBoy convention directly, or provide a name mapping in glTF `extras` (e.g. `vitamoo_bone_remap`). The VitaMoo skeleton expects names like `ROOT`, `PELVIS`, `SPINE`, `HEAD`, `L_LEG`, `R_ARM1`, etc.
+
+### Vertex descaling
+
+```cpp
+// Take out the scale factor from the translation.
+Point3 scale(boneParts.k.x, boneParts.k.y, boneParts.k.z);
+trans = localParts.t * scale;
+```
+
+The exporter strips all scale from the bone hierarchy. The Sims has no runtime bone scaling — it was baked out during export by multiplying translations by the parent's scale. This is why `updateTransforms` only does translation + rotation (no scale). If you import glTF skeletons that have non-uniform scale on bones, you need to bake the scale into the mesh before uploading, or the deformation will be wrong.
+
+### Source files (original C++ reference)
+
+| File | Contents |
+|------|----------|
+| `SimsKit/maxscript/CMXExporter.cpp` | The exporter: `ExtractTransRot`, `TMToQuat`, `FixName`, `CollectSkeleton`, `CollectMotion`, `ExportSkinMesh`, note-track parsing, Physique vertex binding readout. |
+| `SimsKit/maxscript/CMXExporter.h` | `CMXExporter` and `MySceneEntry` class declarations. |
+| `SimsKit/maxscript/maxis-maxscript.ms` | MaxScript UI: database integration, batch export, SourceSafe, filter/export controls. |
+| `SimsKit/U3D/U3DQuaternion.h/.cpp` | Quaternion class: Hamilton multiply (XYZW order), Slerp, `ConvertToMatrix`, `SetFromEuler`. By Eric Bowman, Maxis 1996. |
+| `SimsKit/U3D/U3DTransform.h/.cpp` | Transform class: mat4, rotation/translation factories. |
+| `SimsKit/vitaboy/skeleton.cpp` | Runtime: `Skeleton`, `Bone`, `Skill`, `Practice`, `Suit`, `Dressing`, `DeformableMesh`, `SAnimator`. The deformation and animation playback code that VitaMoo reimplements. |
