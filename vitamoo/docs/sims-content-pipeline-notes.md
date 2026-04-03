@@ -183,3 +183,24 @@ The Sims Exchange and community content sites are partially preserved on the Way
 - [Google Directory: The Sims Modifications and Add-Ons](https://web.archive.org/web/2004*/http://directory.google.com/Top/Games/Video_Games/Simulation/Life/The_Sims/Modifications_and_Add-Ons/*) — Curated link directory to hundreds of content sites.
 
 Mining these archives could recover thousands of IFF objects, BMP skins, CMX/SKN character data, and tutorial content — testable and displayable in VitaMoo immediately, and convertible to modern formats (glTF, PNG) for redistribution on new community sites.
+
+---
+
+## Ken Perlin's Improv and procedural graphics — influence on VitaBoy
+
+The Sims character animation system was directly inspired by Ken Perlin's **Improv** project (Perlin & Goldberg, SIGGRAPH '96). Improv separated character animation into an **Animation Engine** (layered, continuous, non-repetitive motions with smooth transitions) and a **Behavior Engine** (rules governing how actors communicate and decide). Actions were organized into compositing groups — actions in the same group competed (one fades in, others fade out), while actions in different groups layered like image compositing. Perlin's key insight: *"the author thinks of motion as being layered, just as composited images can be layered back to front. The difference is that whereas an image maps pixels to colors, an action maps DOFs to values."*
+
+VitaBoy's Practice/Skill/Motion system implements this same layered architecture: Practices have priorities, opaque practices occlude lower-priority ones on the same bones, and multiple practices blend via weighted averaging. The vocabulary (Skeleton, Bone, Skin, Suit, Dressing, Skill, Practice, Motion) carries Improv's spirit into the game engine.
+
+Since 1996, Perlin has published many interactive Java applet demos on his NYU page, teaching computer graphics to students and the public. Don Hopkins learned from his papers and demo code while designing the Sims character animation system. Perlin's **Webwide World** (1998) was a procedural planet generator running in a Java applet — progressive rendering, cached Catmull-Rom splines for multi-octave noise, and plans for user-owned real-estate on a fractal planet. His later **Dragon Planet** (2013) ported the same no-polygon procedural approach to WebGL fragment shaders. As of November 2025, Perlin is rewriting all his classic Java applets in JavaScript (Canvas2D and WebGL), noting: *"the great thing about ideas is that, unlike technology, ideas can last forever."*
+
+VitaBoy also includes a `QuaternionNoise` generator based on Perlin noise, intended for adding organic wiggle to bone rotations (wired but never tuned for shipping). The `canWiggle` / `wigglePower` bone flags and the `vitamoo_wiggle` glTF extras field preserve this capability for future use.
+
+### References
+
+- [Ken Perlin's NYU page](https://mrl.cs.nyu.edu/~perlin/) — experiments, courses, toys (expired HTTPS cert; content accessible).
+- [Webwide World (1998)](https://web.archive.org/web/20001011065024/http://mrl.nyu.edu/perlin/demox/Planet.html) — procedural fractal planet in a Java applet.
+- [Dragon Planet (2013)](https://blog.kenperlin.com/?p=12821) — procedural planet in a WebGL fragment shader.
+- [Updating applets (2025)](https://blog.kenperlin.com/?p=27980) — rewriting classic Java applets in JavaScript.
+- [Improv: A System for Scripting Interactive Actors in Virtual Worlds](https://mrl.cs.nyu.edu/~perlin/improv/) — Perlin & Goldberg, SIGGRAPH '96. The layered animation architecture that inspired VitaBoy.
+- [HN comment by DonHopkins](https://news.ycombinator.com/) — *"I learned a lot from his papers and demo code, and based the design of The Sims character animation system on his Improv project."*
