@@ -437,6 +437,10 @@ export class Renderer {
     private meshPipelineNoCull!: GPURenderPipeline;
     private meshPipelineSingle!: GPURenderPipeline;
     private meshPipelineNoCullSingle!: GPURenderPipeline;
+    private meshPipelineGpu!: GPURenderPipeline;
+    private meshPipelineGpuNoCull!: GPURenderPipeline;
+    private meshPipelineGpuSingle!: GPURenderPipeline;
+    private meshPipelineGpuNoCullSingle!: GPURenderPipeline;
     private quadPipeline!: GPURenderPipeline;
     private quadPipelineDual!: GPURenderPipeline;
     private meshBindGroupLayout!: GPUBindGroupLayout;
@@ -649,6 +653,54 @@ export class Renderer {
         this.meshPipelineNoCullSingle = this.device.createRenderPipeline({
             layout: meshPipelineLayout,
             vertex: meshVertexState,
+            fragment: meshFragmentStateSingle,
+            primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+            depthStencil: meshDepthStencil,
+        });
+
+        const meshVertexStateGpu: GPUVertexState = {
+            module: meshModule,
+            entryPoint: 'vertexMain',
+            buffers: [
+                {
+                    arrayStride: 24,
+                    attributes: [
+                        { shaderLocation: 0, offset: 0, format: 'float32x3' },
+                        { shaderLocation: 1, offset: 12, format: 'float32x3' },
+                    ],
+                },
+                {
+                    arrayStride: 8,
+                    attributes: [
+                        { shaderLocation: 2, offset: 0, format: 'float32x2' },
+                    ],
+                },
+            ],
+        };
+        this.meshPipelineGpu = this.device.createRenderPipeline({
+            layout: meshPipelineLayout,
+            vertex: meshVertexStateGpu,
+            fragment: meshFragmentState,
+            primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+            depthStencil: meshDepthStencil,
+        });
+        this.meshPipelineGpuNoCull = this.device.createRenderPipeline({
+            layout: meshPipelineLayout,
+            vertex: meshVertexStateGpu,
+            fragment: meshFragmentState,
+            primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
+            depthStencil: meshDepthStencil,
+        });
+        this.meshPipelineGpuSingle = this.device.createRenderPipeline({
+            layout: meshPipelineLayout,
+            vertex: meshVertexStateGpu,
+            fragment: meshFragmentStateSingle,
+            primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+            depthStencil: meshDepthStencil,
+        });
+        this.meshPipelineGpuNoCullSingle = this.device.createRenderPipeline({
+            layout: meshPipelineLayout,
+            vertex: meshVertexStateGpu,
             fragment: meshFragmentStateSingle,
             primitive: { topology: 'triangle-list', cullMode: 'none', frontFace: 'ccw' },
             depthStencil: meshDepthStencil,
@@ -1299,25 +1351,82 @@ export class Renderer {
 
     /**
      * Draw a mesh using a pre-computed GPU deformed buffer (6 floats/vertex: px py pz nx ny nz).
-     * UVs come from the mesh cache; the interleaved vertex buffer is built on the fly from the
-     * deformed data + cached UVs. In a future step this will read directly from a GPU vertex buffer
-     * without CPU involvement.
+     * Positions and normals come from the deformed buffer (slot 0, stride 24).
+     * UVs come from the mesh cache (slot 1, stride 8).
+     * Zero CPU interleave — the GPU has all the data.
      */
     drawMeshFromGpuDeformed(
         mesh: MeshData,
-        _deformedBuffer: GPUBuffer,
+        deformedBuffer: GPUBuffer,
         texture: TextureHandle | null = null,
         objectId?: { type: ObjectIdType; objectId: number; subObjectId?: number },
     ): void {
-        // For now: the GPU deformed buffer exists and can be read back for validation,
-        // but drawing still goes through the CPU interleaved path. The next step will
-        // add a vertex layout that reads pos/norm from the deformed buffer and UVs from
-        // the cached UV buffer, eliminating the CPU interleave entirely.
-        // This method is a placeholder so the stage can call it when deformation=gpu.
-        void _deformedBuffer;
-        void texture;
-        void objectId;
-        void mesh;
+        if (!this.currentPass) this._beginPass(null);
+        const cached = this.meshCache?.getOrCreate(mesh);
+        if (!cached) return;
+
+        const textureValid = texture != null && typeof (texture as GPUTexture).createView === 'function';
+        const texToBind = textureValid ? texture! : null;
+
+        const uniformData = new ArrayBuffer(UNIFORM_SIZE);
+        const view = new DataView(uniformData);
+        for (let i = 0; i < 16; i++) view.setFloat32(i * 4, this.proj[i], true);
+        for (let i = 0; i < 16; i++) view.setFloat32(64 + i * 4, this.modelView[i], true);
+        view.setFloat32(128, this.lightDir[0], true);
+        view.setFloat32(132, this.lightDir[1], true);
+        view.setFloat32(136, this.lightDir[2], true);
+        view.setFloat32(U_MESH_ALPHA, this.alpha, true);
+        const useSolidColor = texToBind == null && this.meshSolidVertexPass;
+        view.setFloat32(U_MESH_FADE, useSolidColor ? this.fadeColor[0] : FADE_SENTINEL, true);
+        view.setFloat32(U_MESH_FADE + 4, useSolidColor ? this.fadeColor[1] : FADE_SENTINEL, true);
+        view.setFloat32(U_MESH_FADE + 8, useSolidColor ? this.fadeColor[2] : FADE_SENTINEL, true);
+        view.setFloat32(U_MESH_FADE + 12, 0, true);
+        view.setUint32(U_MESH_HAS_TEX, texToBind ? 1 : 0, true);
+        view.setUint32(U_MESH_SOLID, useSolidColor ? 1 : 0, true);
+        view.setFloat32(U_MESH_AMBIENT, this.ambient, true);
+        view.setFloat32(U_MESH_DIFFUSE, this.diffuseFactor, true);
+        view.setFloat32(U_MESH_HIGHLIGHT, this.highlight[0], true);
+        view.setFloat32(U_MESH_HIGHLIGHT + 4, this.highlight[1], true);
+        view.setFloat32(U_MESH_HIGHLIGHT + 8, this.highlight[2], true);
+        view.setFloat32(U_MESH_HIGHLIGHT + 12, this.highlight[3], true);
+        view.setFloat32(U_PLUMB_BOB_UI_AMBIENT, this.plumbBobUiAmbient, true);
+        view.setFloat32(U_PLUMB_BOB_UI_DIFFUSE, this.plumbBobUiDiffuse, true);
+
+        const meshUniformBuffer = this.meshUniformPool!.acquire();
+        this.queue.writeBuffer(meshUniformBuffer, 0, uniformData);
+
+        const debugModeU32 = (this.debugSliceMode ?? 0) >>> 0;
+        const pickDbg = new ArrayBuffer(16);
+        const pdv = new DataView(pickDbg);
+        pdv.setUint32(0, debugModeU32, true);
+        pdv.setUint32(4, (objectId?.type ?? 0) >>> 0, true);
+        pdv.setUint32(8, (objectId?.objectId ?? 0) >>> 0, true);
+        pdv.setUint32(12, (objectId?.subObjectId ?? 0) >>> 0, true);
+        const pickUniformBuffer = this.pickUniformPool!.acquire();
+        this.queue.writeBuffer(pickUniformBuffer, 0, pickDbg);
+
+        const texToUse = texToBind ?? this.dummyTexture;
+        const meshBindGroup = this.device.createBindGroup({
+            layout: this.meshBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: meshUniformBuffer } },
+                { binding: 1, resource: texToUse.createView() },
+                { binding: 2, resource: this.defaultSampler },
+                { binding: 3, resource: { buffer: pickUniformBuffer } },
+            ],
+        });
+
+        const useDual = this.pickTextures != null;
+        const meshPipe = useDual
+            ? (this.cullingEnabled ? this.meshPipelineGpu : this.meshPipelineGpuNoCull)
+            : (this.cullingEnabled ? this.meshPipelineGpuSingle : this.meshPipelineGpuNoCullSingle);
+
+        this.currentPass!.setPipeline(meshPipe);
+        this.currentPass!.setBindGroup(0, meshBindGroup);
+        this.currentPass!.setVertexBuffer(0, deformedBuffer);
+        this.currentPass!.setVertexBuffer(1, cached.uvBuffer);
+        this.currentPass!.setIndexBuffer(cached.indexBuffer, cached.useUint32Index ? 'uint32' : 'uint16');
+        this.currentPass!.drawIndexed(cached.indexCount);
     }
 
     /**

@@ -723,31 +723,44 @@ export class MooShowStage {
                         }
                     }
 
-                    if (bTop.active) {
-                        verts = verts.map((v: any) => applyTopTransform(v, bTop, this._cameraTarget.y));
-                        norms = norms.map((v: any) => applyTopTransform(v, bTop, this._cameraTarget.y));
-                    }
+                    const canUseGpuDraw = gpuDeformedBuffer &&
+                        deformBackend === 'gpu' &&
+                        !bTop.active &&
+                        body.x === 0 && body.z === 0 && bodyDir === 0;
 
-                    if (body.x !== 0 || body.z !== 0 || bodyDir !== 0) {
-                        verts = verts.map((v: any) => {
-                            if (!v) return v;
-                            const rx = v.x * cosD - v.z * sinD;
-                            const rz = v.x * sinD + v.z * cosD;
-                            return { x: rx + body.x, y: v.y, z: rz + body.z };
+                    if (canUseGpuDraw && gpuDeformedBuffer) {
+                        renderer.drawMeshFromGpuDeformed(mesh, gpuDeformedBuffer, texture || null, {
+                            type: ObjectIdType.CHARACTER,
+                            objectId: bi,
+                            subObjectId: meshIndex,
                         });
-                        if (bodyDir !== 0) {
-                            norms = norms.map((v: any) => {
-                                if (!v) return v;
-                                return { x: v.x * cosD - v.z * sinD, y: v.y, z: v.x * sinD + v.z * cosD };
-                            });
+                    } else {
+                        if (bTop.active) {
+                            verts = verts.map((v: any) => applyTopTransform(v, bTop, this._cameraTarget.y));
+                            norms = norms.map((v: any) => applyTopTransform(v, bTop, this._cameraTarget.y));
                         }
-                    }
 
-                    renderer.drawMesh(mesh, verts, norms, texture || null, {
-                        type: ObjectIdType.CHARACTER,
-                        objectId: bi,
-                        subObjectId: meshIndex,
-                    });
+                        if (body.x !== 0 || body.z !== 0 || bodyDir !== 0) {
+                            verts = verts.map((v: any) => {
+                                if (!v) return v;
+                                const rx = v.x * cosD - v.z * sinD;
+                                const rz = v.x * sinD + v.z * cosD;
+                                return { x: rx + body.x, y: v.y, z: rz + body.z };
+                            });
+                            if (bodyDir !== 0) {
+                                norms = norms.map((v: any) => {
+                                    if (!v) return v;
+                                    return { x: v.x * cosD - v.z * sinD, y: v.y, z: v.x * sinD + v.z * cosD };
+                                });
+                            }
+                        }
+
+                        renderer.drawMesh(mesh, verts, norms, texture || null, {
+                            type: ObjectIdType.CHARACTER,
+                            objectId: bi,
+                            subObjectId: meshIndex,
+                        });
+                    }
                 } catch { /* skip bad mesh */ }
                 meshIndex++;
             }
