@@ -10,7 +10,7 @@ sequence.
 
 - **[webgpu-renderer-design.md](./webgpu-renderer-design.md)** — full pipeline and long-horizon architecture.
 - **[gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md)** — GPU residency, readback, export/tooling.
-- **[gpu-deformation-prerequisites.md](./gpu-deformation-prerequisites.md)** — validation and profiling prerequisites.
+- **Design [§5.0 Prerequisites and CPU/GPU contract](./webgpu-renderer-design.md#50-prerequisites-and-cpugpu-contract)** — validation, integration, fallback, profiling when changing the GPU deform path.
 
 ---
 

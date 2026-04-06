@@ -6,7 +6,7 @@
 
 | Layer | Role |
 |-------|------|
-| **vitamoo/** | Core: parsers, skeleton math, mesh deformation, animation ticks. No DOM, no canvas. |
+| **vitamoo/** | Core: parsers, skeleton math, mesh deformation, animation ticks, **`io/`** (FAR + Maxis IFF 1.0 + resource handler registry). No DOM, no canvas. |
 | **mooshow/** | Graphics/runtime: WebGPU stage (`Renderer.create`), camera, object-ID picking, spin input, hooks for UI (selection, plumb bob, keys). Depends on `vitamoo`. |
 | **vitamoospace/** | SvelteKit app: full-page demo, scene/character/animation menus, one `VitaMooSpace` component that uses `vitamoo` + `mooshow`. |
 

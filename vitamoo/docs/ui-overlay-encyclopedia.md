@@ -1,10 +1,10 @@
 # UI overlay encyclopedia
 
-Reference behavior for **selection marker** (diamond / arrow above the active character), **pie-menu center head**, **feathered desaturated shadow**, and **speech / thought bubbles with on-screen text** (MMO-style chat). Self-contained: **formulas, timings, layout rules, and checks** only—enough to reimplement the look in any renderer.
+Reference behavior for **selection marker** (diamond / arrow above the active character), **pie-menu center head**, **feathered desaturated shadow**, **censorship / modesty overlay** (mesh-driven mosaic rects), and **speech / thought bubbles with on-screen text** (MMO-style chat). Self-contained: **formulas, timings, layout rules, and checks** only—enough to reimplement the look in any renderer.
 
 **Scope:** numbers, transform order, lighting, timing, and verification targets. **Not** a commitment that VitaMoo already implements all of this.
 
-**Related:** [webgpu-renderer-design.md §3.9](./webgpu-renderer-design.md#39-pie-menu) (compositing plan), [webgpu-renderer-design.md §6](./webgpu-renderer-design.md#6-static-mesh-interchange-gltf-and-plug-in-plumb-bobs) (glTF static meshes), [gltf-extras-metadata.md](./gltf-extras-metadata.md) (optional `extras`).
+**Related:** [webgpu-renderer-design.md §3.9](./webgpu-renderer-design.md#39-pie-menu) (compositing plan), [webgpu-renderer-design.md §3.11](./webgpu-renderer-design.md#311-censorship-mesh-bounding-box-pixelization) (censor rects / mosaic pass), [webgpu-renderer-design.md §6](./webgpu-renderer-design.md#6-static-mesh-interchange-gltf-and-plug-in-plumb-bobs) (glTF static meshes), [gltf-extras-metadata.md](./gltf-extras-metadata.md) (optional `extras`).
 
 ---
 
@@ -17,6 +17,7 @@ Reference behavior for **selection marker** (diamond / arrow above the active ch
 | Round shadow | Circular region on the composed frame: **desaturate** interior, **feather** the rim, respecting **depth** so the effect sits **behind** the overlay plane. |
 | Speech bubble | **Dialogue** anchored above the speaker: chrome (outline + fill + tail), **wrapped text**, timed display, queue when multiple lines arrive. |
 | Thought bubble | **Inner monologue / UI hints**: visually distinct chrome (e.g. cloud puffs vs solid tail), same layout and queue rules as speech unless product differs. |
+| Censorship overlay | **Modesty / policy** when the body is uncovered: bone-attached **bounding meshes** or suits drive **2D rects** for mosaic or pixelization; excluded from **pie-menu head** and often from **normal textured body** draw—see §5. |
 
 ---
 
@@ -78,7 +79,7 @@ Apply in engine order appropriate to your math convention (validate with one gol
 
 ### 2.1 Which meshes
 
-- Walk **all dressings / suits** on the character; **skip** suits marked as **non-rendered overlay** types (e.g. censorship bounding meshes).
+- Walk **all dressings / suits** on the character; **skip** suits marked as **non-rendered overlay** types (e.g. censorship bounding meshes — behavior and compositor order in **§5**).
 - For the **head bone**, use the **bound deformed mesh** for that bone: deform in **local / bone space** for this draw only, then restore **world-space deformation** afterward so the rest of the scene is unchanged.
 
 ### 2.2 Placement
@@ -200,48 +201,98 @@ Pick one primary path; second path is fallback.
 
 **Depth:** bubbles usually **ignore scene depth** (always readable) but **sort** by **screen Y** or **anchor depth** so overlapping speakers stack predictably. Optional: **occlude** bubble if anchor behind wall (depth sample at anchor — higher cost).
 
-### 4.7 Picking and input
+### 4.7 Profanity and moderation (text)
+
+- **Client policy:** optional **word filters** and **replacement** (asterisks, `[filtered]`) before layout; run on the same sanitized string as §4.5 length caps.
+- **Server / trust:** authoritative moderation belongs **upstream**; the overlay only **displays** what it is given. Log moderation actions outside the hot render path.
+- **Streams / ratings:** tie **bubble visibility** to the same flags as **censorship** (§5) when product requires **family-safe** presentation (e.g. hide chat chrome entirely vs replace text).
+
+### 4.8 Picking and input
 
 - Bubbles are **non-pick** by default for character/object ID buffers.
 - Optional: **click speaker name** in bubble for profile (MMO pattern) — separate hit region, not `readObjectIdAt`.
 
-### 4.8 Asset pipeline
+### 4.9 Asset pipeline
 
 - **Chrome:** vector paths (SVG → tessellated tris) or **nine-slice** textures (corners + edges) for scalable bubbles; **two atlases** (speech vs thought) or one atlas with variants.
 - **Localization:** layout must tolerate **±30%** width expansion; avoid hard-coded pixel widths per language.
 
 ---
 
-## 5. Mapping onto VitaMoo
+## 5. Censorship overlay (modesty / safe presentation)
+
+**Fidelity target:** *The Sims* line—**censor-type suits** are often **invisible or untextured box geometry** rigged to the skeleton; they need not be shaded like clothing. The **visible effect** is **mosaic or pixelization** over a **screen-space rectangle** built from projected bounds ([webgpu-renderer-design.md §3.11](./webgpu-renderer-design.md#311-censorship-mesh-bounding-box-pixelization)).
+
+### 5.1 Suit and content rules
+
+- **Tagging:** Mark suits or mesh groups as **censor** / **modesty bounding** in content or [gltf-extras-metadata.md](./gltf-extras-metadata.md) so the pipeline separates them from **normal clothing** draws.
+- **Policy gate:** One **product flag** (rating, stream-safe, debug “disable censor”) controls whether **rects** are accumulated and whether the **mosaic pass** runs. When off, skip rect work and the pass entirely.
+- **State:** Censor is usually driven by **outfit / body coverage** state, not by individual chat lines—unless product explicitly couples them (**§4.7**).
+
+### 5.2 What gets drawn where
+
+| Pass | Censor bounding meshes | Normal body and clothing |
+|------|-------------------------|---------------------------|
+| Opaque character | Often **no textured draw**; only contribute **bounds** to the rect list | Full shaded draw |
+| Object-ID / depth | Optional **sentinel** ids for hybrid masking (**design §3.11**) | Normal body ids |
+| Pie-menu center head | **Exclude** from the head mesh walk (**§2.1**); use real head geometry | Unchanged |
+| Selection marker (**§1**) | Independent; censor does not replace the marker | — |
+
+### 5.3 Rectangle update cadence
+
+- **Each frame** (or when pose changes): transform censor mesh vertices or bone-OBB corners with the **same view–projection** as the main color pass; build **conservative screen rectangles** clamped to the viewport; **union** as needed.
+- **Conservative bounds:** Prefer slightly **large** rects so skinning and motion do not leak uncovered pixels; validate against **golden frames**.
+
+### 5.4 Order vs other overlays
+
+1. Main scene color, depth, and object-ID (if used).
+2. **Censor mosaic** pass—place **before** pie fullscreen treatment if the menu should appear **sharp** on top, or **after** if the whole frame must stay family-safe (**product flag**). See **design §3.9** vs **§3.11**.
+3. Pie stack and lot-local effects: **§2** and **§3** in this doc.
+4. **Speech / thought** layer last or near-last for readability.
+
+Record the chosen order in renderer/stage config for screenshot regression.
+
+### 5.5 Verification targets
+
+- Censor **on:** no intended skin detail visible inside rects (document any allowed tolerance).
+- Censor **off:** no cost from censor rect list or mosaic pass (early out).
+- **Pie head** never uses censor-only suits (**§2.1**).
+
+---
+
+## 6. Mapping onto VitaMoo
 
 | Concept | Direction |
 |--------|-----------|
 | Selection marker | **UI layer** draw: shared lighting uniforms (§1.5–1.6), optional procedural or glTF mesh (§1.7); keep **object-ID** behavior if picking must distinguish marker vs body. |
 | Pie stack | Frame copy → **desaturate** → **vignette** → **round shadow** (§3) → 2D chrome → **head draw** (§2). |
 | Speech / thought | **Overlay** pass after characters (and after or with other UI): project anchors from mooshow body list; **DOM or canvas** layer recommended for v1 text; GPU chrome optional. |
+| Censorship | **Rect accumulation** from tagged suits + **mosaic post-pass** per **§5** and **design §3.11**; respect **policy flag** and compositor order **§5.4**. |
 | Time | **Wall-clock ms** for spin (§1.2) and pulses (§1.4) unless product explicitly ties UI to paused sim time. |
 
 ---
 
-## 6. Implementation checklist
+## 7. Implementation checklist
 
 1. **Imported marker mesh:** glTF for an authored diamond/arrow; verify pivot, scale, normals; optional `extras` for offsets.
 2. **Matrix audit:** one **golden frame** (screenshot or numeric vertex) comparing transform stack §1.3 and §2.6 to approved art direction.
 3. **Renderer API:** group **selection-marker lighting** (direction from camera + degree offsets, ambient base/min, optional mood tint) so procedural diamond and imported mesh share one path.
 4. **Round shadow pass:** §3.3 verbatim in shader space; document linear vs sRGB.
-5. **Pie menu compositor:** ordered passes per §5; head draw uses §2 only.
+5. **Pie menu compositor:** ordered passes per **§6** table; head draw uses §2 only.
 6. **Motion tests:** table-driven tests for **slice index → nod/shake delta** and **400 ms** ease.
 7. **Bubble service:** `BubbleQueue` per speaker (§4.4); `pushMessage({ channel, text, … })` from sim or network; projection hook from stage (`headScreenPos(bodyIndex)`).
-8. **Bubble UI layer:** choose §4.6 path; implement §4.3 wrap + §4.2 clamp; chrome assets §4.8.
+8. **Bubble UI layer:** choose §4.6 path; implement §4.3 wrap + §4.2 clamp; optional text filter hook **§4.7**; chrome assets **§4.9**.
 9. **Network adapter (optional):** schema for remote chat lines; rate limit §4.5; ordering §4.5.
-10. **Docs:** when shipped, update [webgpu-renderer-status.md](./webgpu-renderer-status.md); keep [webgpu-renderer-design.md](./webgpu-renderer-design.md) as architecture pointer, not duplicate of formulas here.
+10. **Censorship:** tagged suits → per-frame screen rects → mosaic pass; **§5.4** order; pie head exclusion **§2.1**; feature flag for off path.
+11. **Docs:** when shipped, update [webgpu-renderer-status.md](./webgpu-renderer-status.md); keep [webgpu-renderer-design.md](./webgpu-renderer-design.md) as architecture pointer, not duplicate of formulas here.
 
 ---
 
-## 7. Acceptance checks
+## 8. Acceptance checks
 
 - Marker completes **360°** in **2 s** real time (§1.2).
 - Shadow: **inner 2/3** fully grayed per §3.3; **outer 1/3** feathered; no pixels modified where depth fails §3.2.
 - Pie head: ambient **0.8 vs 1.0** per selection state (§2.4); scale follows **12 / 2^zoom × 1.75** after open (§2.3).
 - **Bubbles:** speech and thought use distinct chrome; text wraps within **maxWidth**; tail or anchor stays within viewport or degrades gracefully; TTL and fade behave per §4.4; long UTF-8 strings cap without jank.
+- **Censor:** with flag on, rects track pose and **§5.5** holds; with flag off, no mosaic cost; pie head still obeys **§2.1**.
 - **Regression:** picking and plumb-bob IDs in mooshow unchanged unless pie UI intentionally participates in hit testing.

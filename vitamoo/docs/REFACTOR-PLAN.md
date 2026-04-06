@@ -15,7 +15,7 @@
 
 Definition of Done: items 1–5 are met for shipping layers (core, mooshow, vitamoospace, Pages, quiet default console).
 
-**Beyond Phase 5 (not refactor backlog):** **Holodeck** (design §4 in [`webgpu-renderer-design.md`](./webgpu-renderer-design.md))—terrain/floor/wall/roof pipeline—is still **not started**. **Design §5** (GPU animation, deformation, world transform, batched compute, validation taps) is **largely implemented** in code; remaining gaps are observability, UX, and automated GPU end-to-end parity—see [`webgpu-renderer-status.md`](./webgpu-renderer-status.md). The [`gpu-deformation-prerequisites.md`](./gpu-deformation-prerequisites.md) checklist remains the contract reference for regressions. Further-out: RGB+alpha+z layered sprites for object tooling, save viewing/editing.
+**Beyond Phase 5 (not refactor backlog):** **Holodeck** (design §4 in [`webgpu-renderer-design.md`](./webgpu-renderer-design.md))—terrain/floor/wall/roof pipeline—is still **not started**. **Design §5** (GPU animation, deformation, world transform, batched compute, validation taps) is **largely implemented** in code; remaining gaps are observability, UX, and automated GPU end-to-end parity—see [`webgpu-renderer-status.md`](./webgpu-renderer-status.md). **Design §5.0** remains the contract reference for CPU/GPU deformation regressions. Further-out: RGB+alpha+z layered sprites for object tooling, save viewing/editing.
 
 ---
 

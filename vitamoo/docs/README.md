@@ -8,14 +8,13 @@ Focused notes for the **WebGPU renderer** and related roadmap. The **full stack 
 | **[REFACTOR-PLAN.md](./REFACTOR-PLAN.md)** | **Layer split** (phases 0–5): status, boundaries, migration narrative. |
 | **[webgpu-renderer-design.md](./webgpu-renderer-design.md)** | **Specification:** current pipeline, object-ID layout, holodeck roadmap (§4), GPU deformation (§5), WGSL overview, display-list shapes. Update this when behavior or formats change. |
 | **[webgpu-renderer-status.md](./webgpu-renderer-status.md)** | **Living status:** what is implemented vs planned, GitHub Pages deployment, file-level map, recommended next steps, out-of-scope list, links to sibling repos. |
-| **[gpu-deformation-prerequisites.md](./gpu-deformation-prerequisites.md)** | **Checklist** before starting GPU skinning work (contract, integration, fallback, profiling). |
 | **[gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md)** | Resident GPU data, readback for browser object export (sprites / BMP / IFF), glTF interchange, streamed animation from clips. |
 | **[sims-content-pipeline-notes.md](./sims-content-pipeline-notes.md)** | Historical notes on 3DS Max note tracks, the CMX Exporter, Transmogrifier/RugOMatic/ShowNTell, community content sites, and how they inform VitaMoo's browser-based tool and interchange design. |
 | **[gltf-extras-metadata.md](./gltf-extras-metadata.md)** | How VitaMoo uses glTF `extras` for the same purposes as 3DS Max note tracks: skeleton/suit/accessory tagging, bone flags, animation skill metadata, time-keyed events, content catalog data. Round-trip-safe through Blender and conformant tools. |
-| **[ui-overlay-encyclopedia.md](./ui-overlay-encyclopedia.md)** | **UI overlay reference:** selection marker, plumb-bob-style lighting, pie-menu center head, feathered shadow, **speech/thought bubbles with text** (MMO-style); formulas, timings, layout, queues; glTF for marker mesh; implementation checklist. |
+| **[ui-overlay-encyclopedia.md](./ui-overlay-encyclopedia.md)** | **UI overlay reference:** selection marker, plumb-bob-style lighting, pie-menu center head, feathered shadow, **censorship overlay**, **speech/thought bubbles with text** (MMO-style); formulas, timings, layout, queues; glTF for marker mesh; implementation checklist. |
 | **[OBLITERATOR-TYPESCRIPT.md](./OBLITERATOR-TYPESCRIPT.md)** | **Sims 1 save / game data in TypeScript:** Python survey; **L0–L4** I/O + **§6** layered **YAML/JSON** interchange (exploded/decoded/semantic), **manifest + fidelity profiles** (Transmogrifier-style partial export, derived α/Z/zoom), **BHAV → YAML** round-trip; MOOLLM **[sim-obliterator](https://github.com/SimHacker/moollm/tree/main/designs/sim-obliterator)**; pure TS read path; roster → VitaMoo first. |
 
-**Reading order:** [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for orientation, then [`webgpu-renderer-design.md`](./webgpu-renderer-design.md) for depth. Use the prerequisites doc when beginning §5 work.
+**Reading order:** [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for orientation, then [`webgpu-renderer-design.md`](./webgpu-renderer-design.md) for depth. GPU deform/animation **contract and checklist** live in **design §5.0** when changing that path.
 
 ---
 
@@ -25,7 +24,7 @@ Focused notes for the **WebGPU renderer** and related roadmap. The **full stack 
 - **GPU pipeline (default path when supported):** batched compute for animation (`GpuAnimator`), deformation (`GpuDeformer`), world transform (`GpuWorldTransform`), resident skill/mesh caches; draw from GPU-deformed buffers with **CPU fallback** (`deformMesh` + `drawMesh`) when needed. See [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for the authoritative table.
 - **CPU reference path:** `Practice.tick` → `updateTransforms` → `deformMesh` remains for gameplay state, validation taps, and fallback drawing.
 - **Logging:** Renderer / texture / deform / pick noise gated behind `Renderer.create(..., { verbose: true })`, `StageConfig.verbose`, or `?vitamooVerbose=1` (default quiet).
-- **Documentation split:** One canonical **design** spec ([`webgpu-renderer-design.md`](./webgpu-renderer-design.md)), one **status/roadmap** doc ([`webgpu-renderer-status.md`](./webgpu-renderer-status.md)), and a **§5 prerequisites** checklist ([`gpu-deformation-prerequisites.md`](./gpu-deformation-prerequisites.md)). Implemented WGSL passes are summarized in **design §1.2** (not duplicated in status).
+- **Documentation split:** One canonical **design** spec ([`webgpu-renderer-design.md`](./webgpu-renderer-design.md), including **§5.0** CPU/GPU contract for deformation), one **status/roadmap** doc ([`webgpu-renderer-status.md`](./webgpu-renderer-status.md)). Implemented WGSL passes are summarized in **design §1.2** (not duplicated in status).
 
 ---
 
@@ -63,4 +62,4 @@ See **[webgpu-renderer-status.md](./webgpu-renderer-status.md)** (gaps, next ste
 ## History check (no lost content)
 
 - **`webgpu-renderer-design.md`** is byte-identical to the last committed **`WEBGPU-RENDERER-DESIGN.md`** at `f5c3639` (342 lines).
-- **Former `WEBGPU-HANDOFF-CONTEXT.md` (108 lines)** is covered by **`webgpu-renderer-status.md`** + **`gpu-deformation-prerequisites.md`** + **design §1.2** (WGSL list intentionally lives only in the design doc).
+- **Former `WEBGPU-HANDOFF-CONTEXT.md` (108 lines)** is covered by **`webgpu-renderer-status.md`** + **design §5.0** + **design §1.2** (WGSL list intentionally lives only in the design doc).

@@ -160,7 +160,9 @@ The original `SAnimator` delivered note-track events to SimAntics tree code duri
 
 ## References
 
-- [Automating The Sims Character Animation Pipeline with MaxScript](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/30) — Don Hopkins, 2004 (email to John Wainwright, 1998).
+Primary links for the Drupal-era articles are **Wayback** snapshots of `donhopkins.com`. **§ Hacker News (DonHopkins / SimHacker)** lists discussion threads with **Medium** and other mirrors.
+
+- [Automating The Sims Character Animation Pipeline with MaxScript](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/30) — Don Hopkins, 2004 (email to John Wainwright, 1998). **HN:** [5844531](https://news.ycombinator.com/item?id=5844531) (SimHacker), [40417009](https://news.ycombinator.com/item?id=40417009) (DonHopkins, includes Wayback of node/30 in comment). **Medium:** [Automating the Sims character animation pipeline with MaxScript](https://donhopkins.medium.com/automating-the-sims-character-animation-pipeline-with-maxscript-bc490787d7a2) (from [30360424](https://news.ycombinator.com/item?id=30360424)).
 - [Sims VitaBoy Character Animation Library Documentation](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/19) — Don Hopkins. Full VitaBoy API, note track tags, SAnimator events.
 - [Sims Character Animation File Format](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/20) — Don Hopkins. CMX, SKN, BCF, BMF, CFP structures.
 - [Details on The Sims Character Animation File Format and Rendering](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/21) — Don Hopkins. Deformation algorithm, blended vertices, smoothing groups.
@@ -172,17 +174,35 @@ The original `SAnimator` delivered note-track events to SimAntics tree code duri
 - [ShowNTell ActiveX Plug-In for Previewing Sims Objects](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/2) — Don Hopkins. Live IFF preview on web pages.
 - [RSS 2.0 Sims Module, and MySim tool for Radio UserLand](https://web.archive.org/web/20080224054735/https://www.donhopkins.com/drupal/node/5) — Don Hopkins. Blog-based content syndication.
 
+### Hacker News (DonHopkins / SimHacker)
+
+Don Hopkins posts on Hacker News as **[DonHopkins](https://news.ycombinator.com/user?id=DonHopkins)** and **[SimHacker](https://news.ycombinator.com/user?id=SimHacker)**. These threads link **live, Medium, or Wayback** URLs that overlap the Drupal references above:
+
+| Topic | Hacker News |
+|-------|-------------|
+| **Automating The Sims Character Animation Pipeline with MaxScript** (drupal node/30) | [item?id=5844531](https://news.ycombinator.com/item?id=5844531) (SimHacker — direct `donhopkins.com/drupal/node/30`); [item?id=40417009](https://news.ycombinator.com/item?id=40417009) (DonHopkins — Wayback of node/30 in comment); [item?id=30360424](https://news.ycombinator.com/item?id=30360424) |
+| **Medium** reprint of that MaxScript article | [Automating the Sims character animation pipeline with MaxScript](https://donhopkins.medium.com/automating-the-sims-character-animation-pipeline-with-maxscript-bc490787d7a2) |
+| **The Sims design documents** (zip, downloads, related Medium posts) | [item?id=43065985](https://news.ycombinator.com/item?id=43065985) (DonHopkins, on *The Sims Game Design Documents (1997)*); story [item?id=43064273](https://news.ycombinator.com/item?id=43064273) → [donhopkins.com/home/TheSimsDesignDocuments/](https://donhopkins.com/home/TheSimsDesignDocuments/) |
+| **Design Draft 3** note (same-sex relationships) plus older links | [item?id=22886489](https://news.ycombinator.com/item?id=22886489) (DonHopkins) |
+| **`theSimsObjects` blog** (Wayback category) | [item?id=40050697](https://news.ycombinator.com/item?id=40050697) → [Wayback: donhopkins.com blog category](https://web.archive.org/web/20040329181128/http://www.donhopkins.com/blog/categories/theSimsObjects/) |
+| **drupal node/31** (Wayback in comment) | [item?id=30360424](https://news.ycombinator.com/item?id=30360424) → [Wayback snap](https://web.archive.org/web/20160704065742/http://www.donhopkins.com/drupal/node/31) |
+| **Ken Perlin / Improv** (quote used below) | [item?id=46227104](https://news.ycombinator.com/item?id=46227104) |
+
+No HN thread was located here that **directly** cites drupal node/19, /20, /21, /16, /18, /17, /2, or /5; the **References** Wayback URLs above are the stable entry points for those pages.
+
 ### Archive.org content mining targets
 
-The Sims Exchange and community content sites are partially preserved on the Wayback Machine. These are rich sources of downloadable IFF objects, character skins, family albums, stories, and tutorials — content that could be imported, previewed, and republished through VitaMoo browser tools.
+The Sims Exchange and community sites are only **partially** preserved. Links that use Wayback **wildcards** (`/web/2004*/http://example.com/*`) often open a **capture index** (a machine listing of archived URLs), not a replayed HTML page. Prefer URLs with a **single timestamp** (`/web/YYYYMMDDhhmmss/http://…`), or open [web.archive.org](https://web.archive.org/), type the original hostname, and pick a date from the **calendar**.
 
-- [The Sims Exchange](https://web.archive.org/web/2004*/http://thesims.ea.com/us/exchange/*) — EA's official user content hub: family albums, houses, stories, rated and searchable. Captures from ~2001–2008 contain downloadable families, houses, and story pages with embedded screenshots.
-- [SimFreaks](https://web.archive.org/web/2003*/http://www.simfreaks.com/*) — Major fan site with custom objects, skins, tutorials, and forums.
-- [The Sims Transmogrifier home page](https://web.archive.org/web/2007*/http://www.thesimstransmogrifier.com/*) — Download site, documentation, Magic Cookie registration, links to community resources.
-- [The Bunny Wuffles School of Sims Transmogrification](https://web.archive.org/web/2004*/http://www.strategyplanet.com/thesims/sas/bwsost/*) — Step-by-step TMog + Photoshop tutorials from beginner to advanced.
-- [Google Directory: The Sims Modifications and Add-Ons](https://web.archive.org/web/2004*/http://directory.google.com/Top/Games/Video_Games/Simulation/Life/The_Sims/Modifications_and_Add-Ons/*) — Curated link directory to hundreds of content sites.
+**Concrete snapshots (rendered HTML):**
 
-Mining these archives could recover thousands of IFF objects, BMP skins, CMX/SKN character data, and tutorial content — testable and displayable in VitaMoo immediately, and convertible to modern formats (glTF, PNG) for redistribution on new community sites.
+- [The Sims Exchange — family listings for user TychoBrahe](https://web.archive.org/web/20000601171503/http://www.thesims.com/us/exchange/results/families_results.phtml?query=allfamilies&owner=TychoBrahe&rangelow=1&rangehigh=10) — June 2000 capture: search results page with downloadable family entries for one Exchange account. The Sims 1 site lived at `www.thesims.com` before later `thesims.ea.com` URLs. File downloads from archived Exchange pages usually fail (dead back-ends); the value is page structure, screenshots, and metadata.
+- [SimFreaks home](https://web.archive.org/web/20030203163751/http://simfreaks.com/) — March 2003.
+- [The Sims Transmogrifier](https://web.archive.org/web/20040111133027/http://www.thesimstransmogrifier.com/) — January 2004.
+
+**No stable deep link found here:** Bunny Wuffles / StrategyPlanet Sims tutorials and the old Google Directory “Sims modifications” category either lack reliable Wayback captures or return save/embed redirects from automated URL patterns. Search [web.archive.org](https://web.archive.org/) for `strategyplanet.com` + `thesims` or `directory.google.com` + `The_Sims` and open a snapshot from the calendar.
+
+Mining these archives can still recover HTML, screenshots, filenames, and tutorial text — useful for VitaMoo import experiments and for rebuilding community catalogs, even when original downloads no longer run.
 
 ---
 
@@ -198,12 +218,12 @@ VitaBoy also includes a `QuaternionNoise` generator based on Perlin noise, inten
 
 ### References
 
-- [Ken Perlin's NYU page](https://mrl.cs.nyu.edu/~perlin/) — experiments, courses, toys (expired HTTPS cert; content accessible).
+- [Ken Perlin's NYU page (archived Nov 2020)](https://web.archive.org/web/20201109093258/https://mrl.cs.nyu.edu/~perlin/) — experiments, courses, toys. Live `https://mrl.cs.nyu.edu/~perlin/` has had TLS problems; this snapshot usually loads.
 - [Webwide World (1998)](https://web.archive.org/web/20001011065024/http://mrl.nyu.edu/perlin/demox/Planet.html) — procedural fractal planet in a Java applet.
 - [Dragon Planet (2013)](https://blog.kenperlin.com/?p=12821) — procedural planet in a WebGL fragment shader.
 - [Updating applets (2025)](https://blog.kenperlin.com/?p=27980) — rewriting classic Java applets in JavaScript.
-- [Improv: A System for Scripting Interactive Actors in Virtual Worlds](https://mrl.cs.nyu.edu/~perlin/improv/) — Perlin & Goldberg, SIGGRAPH '96. The layered animation architecture that inspired VitaBoy.
-- [HN comment by DonHopkins](https://news.ycombinator.com/) — *"I learned a lot from his papers and demo code, and based the design of The Sims character animation system on his Improv project."*
+- **Improv** (Perlin & Goldberg, SIGGRAPH '96) — layered animation architecture that inspired VitaBoy. Canonical URL: `https://mrl.cs.nyu.edu/~perlin/improv/` (TLS has often failed in practice). For snapshots, search the [Wayback Machine](https://web.archive.org/) for `mrl.nyu.edu` or `mrl.cs.nyu.edu` and path `perlin/improv`. Context: [Hacker News — DonHopkins on Improv](https://news.ycombinator.com/item?id=46227104).
+- [Hacker News — thread with comment by DonHopkins](https://news.ycombinator.com/item?id=46227104) — *"I learned a lot from his papers and demo code, and based the design of The Sims character animation system on his Improv project."*
 
 ---
 
@@ -215,7 +235,11 @@ Notes about the Sims character animation pipeline that matter for anyone buildin
 
 3DS Max is **Z-up right-handed**. The Sims game is **Y-up**. The CMX Exporter converts at export time using `decomp_affine` on Max's `Matrix3` transforms. By the time data reaches CMX/SKN/CFP files, it is already in the game's coordinate system. VitaMoo's TypeScript parsers and WGSL shaders work in the game coordinate system directly — no axis swaps needed for Sims 1 content.
 
-**glTF** is **Y-up right-handed, +Z toward the viewer** (same handedness as the Sims game data, but the Z axis points the other direction from some conventions). When importing glTF into VitaMoo, the coordinate conversion happens in the glTF importer, not in the shaders or the deformation pipeline. This keeps the GPU path clean and format-agnostic.
+**Sims-aligned VitaMoo space** (what deformation and WGSL use after native parsers run) is **right-handed** with **+Y up**. CFP animation on disk is stored in a **DirectX-oriented** encoding relative to that runtime; **`parseCFP`** in `vitamoo/vitamoo/parser.ts` converts it into Sims-aligned VitaMoo space by negating stored **Z** on translation keys and **W** on quaternion keys.
+
+**glTF 2.0** is defined by Khronos as **right-handed** with **+Y up** — the **same** handedness and up axis as Sims-aligned VitaMoo. In glTF, a default camera looks down **−Z**, so **+Z** is the world direction **from the origin toward the viewer** in that standard layout (this is the glTF spec’s camera rule, not a separate informal convention).
+
+**Import boundary:** Parsers and glTF loaders must put every asset into that **one** Sims-aligned VitaMoo basis. The minimal **`loadGltfMeshes`** path currently copies mesh vertices **without** an extra global axis matrix; a full skeletal glTF importer should apply any needed fixed rotation or scale **there**, alongside the CFP rules — **not** inside the deformation shaders, which always see a single world frame.
 
 ### `ExtractTransRot` — how bone-local transforms are computed
 

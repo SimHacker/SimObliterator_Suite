@@ -104,6 +104,31 @@ export { createDiamondMesh } from './procedural/diamond.js';
 export type { ProceduralMeshFactory } from './procedural/index.js';
 export { transformMesh, transformMeshUpright } from './display-list.js';
 export { loadGltfMeshes } from './loaders/gltf.js';
+
+export {
+    MAXIS_IFF1_HEADER,
+    MAXIS_IFF_FLAG_INVALID,
+    MAXIS_IFF_FLAG_INTERNAL,
+    MAXIS_IFF_FLAG_LITTLE_ENDIAN,
+    isMaxisIff1,
+    readMaxisIff1BlockHeader,
+    listMaxisIff1Resources,
+    getMaxisIff1ResourceData,
+    FAR_MAGIC,
+    FAR_VERSION,
+    isFar,
+    parseFar,
+    extractFarEntry,
+    ResourceHandlerRegistry,
+} from './io/index.js';
+export type {
+    MaxisIff1BlockHeader,
+    MaxisIff1Resource,
+    FarArchive,
+    FarEntry,
+    ResourceHandler,
+    ResourceParseContext,
+} from './io/index.js';
 export type {
     DisplayListEntry,
     DisplayListEntryStatic,
