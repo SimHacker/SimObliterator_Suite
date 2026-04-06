@@ -110,8 +110,8 @@ export interface StageConfig {
     /** RGB tint for the plumb-bob (simulation / UI). Default Sims-style green. */
     plumbBobColor?: { r: number; g: number; b: number };
     /**
-     * Plumb-bob uses the same light direction as characters but its own ambient/diffuse so it stays readable.
-     * Defaults: ambient 0.9, diffuse 0.14 (clamped to 1 in the shader).
+     * Plumb-bob uses the same light direction as characters but its own ambient/diffuse.
+     * Defaults: ambient 0.25, diffuse 1.0 (per ui-overlay-encyclopedia §1.5-1.6).
      */
     plumbBobUiLighting?: { ambient: number; diffuse: number };
     /**
@@ -221,8 +221,8 @@ export class MooShowStage {
         this._plumbBobScale = config.plumbBobScale ?? 1;
         this._plumbBobColor = config.plumbBobColor ?? { r: 0.2, g: 1.0, b: 0.2 };
         const ui = config.plumbBobUiLighting;
-        this._plumbBobUiAmbient = ui?.ambient ?? 0.9;
-        this._plumbBobUiDiffuse = ui?.diffuse ?? 0.14;
+        this._plumbBobUiAmbient = ui?.ambient ?? 0.25;
+        this._plumbBobUiDiffuse = ui?.diffuse ?? 1.0;
         this._selHi = config.selectionHighlight ?? { r: 0.25, g: 0.35, b: 0.55, a: 0.28 };
         this._hovHi = config.hoverHighlight ?? { r: 0.2, g: 0.45, b: 0.28, a: 0.18 };
         this._sceneLighting = config.sceneLighting;
@@ -711,12 +711,8 @@ export class MooShowStage {
 
     private _applyActorHighlight(renderer: NonNullable<ResolvedRenderer>, bi: number): void {
         const h = this._hoverActor;
-        const s = this._selectedActor;
-        if (s >= 0 && bi === s) {
-            const t = this._selHi;
-            renderer.setHighlight(t.r, t.g, t.b, t.a);
-        } else if (h >= 0 && bi === h && bi !== s) {
-            const t = this._hovHi;
+        if (h >= 0 && bi === h) {
+            const t = (bi === this._selectedActor) ? this._selHi : this._hovHi;
             renderer.setHighlight(t.r, t.g, t.b, t.a);
         } else {
             renderer.setHighlight(0, 0, 0, 0);

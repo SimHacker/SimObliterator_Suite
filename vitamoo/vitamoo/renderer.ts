@@ -459,9 +459,9 @@ export class Renderer {
     private fadeColor = new Float32Array([FADE_SENTINEL, FADE_SENTINEL, FADE_SENTINEL]);
     private ambient = 0.25;
     private diffuseFactor = 0.75;
-    /** Solid/plumb-bob pass only: high floor so UI reads in dark rooms; uses same `lightDir` as characters. */
-    private plumbBobUiAmbient = 0.9;
-    private plumbBobUiDiffuse = 0.14;
+    /** Solid/plumb-bob pass only: §1.5-1.6 of ui-overlay-encyclopedia — ambient 0.25, directional 1.0. */
+    private plumbBobUiAmbient = 0.25;
+    private plumbBobUiDiffuse = 1.0;
     private highlight = new Float32Array([0, 0, 0, 0]);
     private cullingEnabled = true;
 
