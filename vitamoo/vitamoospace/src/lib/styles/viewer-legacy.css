@@ -159,7 +159,7 @@
 
 .vitamoo-legacy .sidebar-tabs {
 	display: flex;
-	gap: 0;
+	gap: 4px;
 	padding: 0;
 	flex: 1;
 	min-width: 0;
@@ -190,7 +190,7 @@
 }
 
 .vitamoo-legacy .sidebar-tab:not(:first-child) {
-	margin-left: -1px;
+	margin-left: 0;
 }
 
 .vitamoo-legacy .sidebar-tab:hover:not([aria-selected='true']) {
