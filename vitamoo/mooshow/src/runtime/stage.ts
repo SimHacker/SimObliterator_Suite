@@ -793,7 +793,7 @@ export class MooShowStage {
             const trailLength = this._trailMode === 'force'
                 ? 0.22
                 : Math.max(0.08, 0.4 - spinSpeed * 0.02);
-            renderer.fadeScreen(0.1, 0.1, 0.15, trailLength);
+            renderer.fadeScreen(0, 0, 0, trailLength);
         } else {
             renderer.clear();
         }

@@ -1061,7 +1061,7 @@ export class Renderer {
         if (!this.depthTexture && tex.width > 0 && tex.height > 0) {
             this.setViewport(0, 0, tex.width, tex.height);
         }
-        const clearVal: GPUColor = clearColor ?? { r: 0.1, g: 0.1, b: 0.15, a: 1 };
+        const clearVal: GPUColor = clearColor ?? { r: 0, g: 0, b: 0, a: 1 };
         const colorAttachments: GPURenderPassColorAttachment[] = [];
         if (this.pickTextures) {
             const uintClear: GPUColor = { r: 0, g: 0, b: 0, a: 0 };
@@ -1131,11 +1131,11 @@ export class Renderer {
         );
     }
 
-    clear(r = 0.1, g = 0.1, b = 0.15): void {
+    clear(r = 0, g = 0, b = 0): void {
         this._beginPass({ r, g, b, a: 1 });
     }
 
-    fadeScreen(r = 0.1, g = 0.1, b = 0.15, alpha = 0.3): void {
+    fadeScreen(r = 0, g = 0, b = 0, alpha = 0.3): void {
         this._beginPass(null);
         const useDual = this.pickTextures != null;
         this.currentPass!.setPipeline(useDual ? this.quadPipelineDual : this.quadPipeline);
