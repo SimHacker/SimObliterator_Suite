@@ -1058,45 +1058,53 @@ export class MooShowStage {
                 }
 
                 for (const work of gpuBodyWorks) {
-                    const pre = topPhysicsToPreRotation(work.bTop, this._cameraTarget.y);
-                    let mi = 0;
-                    for (const { mesh } of work.body.meshes) {
-                        const deformedBuf = renderer.encodeDeformMeshGpu(
-                            computeEncoder,
-                            mesh,
-                            work.boneGpuBuffer,
-                            work.meshBoneBind,
-                        );
-                        work.gpuDeformedBuffers.push(deformedBuf);
+                    try {
+                        const pre = topPhysicsToPreRotation(work.bTop, this._cameraTarget.y);
+                        let mi = 0;
+                        for (const { mesh } of work.body.meshes) {
+                            const deformedBuf = renderer.encodeDeformMeshGpu(
+                                computeEncoder,
+                                mesh,
+                                work.boneGpuBuffer,
+                                work.meshBoneBind,
+                            );
+                            work.gpuDeformedBuffers.push(deformedBuf);
 
-                        if (tapDeform && deformedBuf) {
-                            const bytes = mesh.vertices.length * DEFORMED_VERTEX_FLOATS * 4;
-                            const tap = renderer.getTapBuffer(`deform-${work.bi}-${mi}`, bytes);
-                            computeEncoder.copyBufferToBuffer(deformedBuf, 0, tap, 0, bytes);
-                        }
+                            if (tapDeform && deformedBuf) {
+                                const bytes = mesh.vertices.length * DEFORMED_VERTEX_FLOATS * 4;
+                                const tap = renderer.getTapBuffer(`deform-${work.bi}-${mi}`, bytes);
+                                computeEncoder.copyBufferToBuffer(deformedBuf, 0, tap, 0, bytes);
+                            }
 
-                        if (deformedBuf) {
-                            const wtp: WorldTransformParams = {
-                                bodyRotCos: work.cosD,
-                                bodyRotSin: work.sinD,
-                                bodyX: work.body.x,
-                                bodyZ: work.body.z,
-                                preActive: pre.active,
-                                pivotY: pre.pivotY,
-                                preTransX: pre.transX,
-                                preTransZ: pre.transZ,
-                                preRotation: pre.rotation,
-                                scale: work.body.scale,
-                                vertexCount: mesh.vertices.length,
-                            };
-                            renderer.encodeWorldTransformGpu(computeEncoder, deformedBuf, wtp);
+                            if (deformedBuf) {
+                                const wtp: WorldTransformParams = {
+                                    bodyRotCos: work.cosD,
+                                    bodyRotSin: work.sinD,
+                                    bodyX: work.body.x,
+                                    bodyZ: work.body.z,
+                                    preActive: pre.active,
+                                    pivotY: pre.pivotY,
+                                    preTransX: pre.transX,
+                                    preTransZ: pre.transZ,
+                                    preRotation: pre.rotation,
+                                    scale: work.body.scale,
+                                    vertexCount: mesh.vertices.length,
+                                };
+                                renderer.encodeWorldTransformGpu(computeEncoder, deformedBuf, wtp);
+                            }
+                            mi++;
                         }
-                        mi++;
+                    } catch (e) {
+                        console.warn(`[stage] GPU deform encode failed: body ${work.bi}`, e);
                     }
                     gpuDeformedByBody.set(work.bi, work.gpuDeformedBuffers);
                 }
 
-                renderer.submitComputeEncoder(computeEncoder);
+                try {
+                    renderer.submitComputeEncoder(computeEncoder);
+                } catch (e) {
+                    console.warn('[stage] GPU compute submit failed — bodies may fall back to CPU', e);
+                }
             }
         }
 
@@ -1164,8 +1172,8 @@ export class MooShowStage {
                             subObjectId: meshIndex,
                         });
                     }
-                } catch {
-                    // Skip malformed mesh entries; continue rendering remaining meshes.
+                } catch (e) {
+                    console.warn(`[stage] mesh draw failed: body ${bi} mesh ${meshIndex}`, mesh?.name, e);
                 }
                 meshIndex++;
             }
