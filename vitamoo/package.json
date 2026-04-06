@@ -8,7 +8,8 @@
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc",
     "dev": "npm run build",
-    "serve": "npm run build && npx http-server dist -o -c-1"
+    "serve": "npm run build && npx http-server dist -o -c-1",
+    "parity:fixtures": "tsc && node scripts/parity-fixture.mjs"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.38",

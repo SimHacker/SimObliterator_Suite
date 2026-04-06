@@ -14,6 +14,15 @@
 import type { MeshData, Vec2 } from './types.js';
 import type { GpuInstrumentationCallbacks } from './gpu-instrumentation.js';
 
+/** Cache key + name map so mesh bone-binding indices match `packBoneTransforms` / skeleton order. */
+export interface GpuMeshBoneBindContext {
+    cacheKey: string;
+    boneNameToSkeletonIndex: ReadonlyMap<string, number>;
+}
+
+/** Single-arg `getOrCreate(mesh)` uses raw mesh binding indices (only safe when they match skeleton order). */
+export const GPU_MESH_RAW_BONE_BIND_CACHE_KEY = '__raw_mesh_bone_idx__';
+
 function meshVertexUv(mesh: MeshData, vertexIndex: number): Vec2 {
     const uvs = mesh.uvs;
     if (vertexIndex < uvs.length) return uvs[vertexIndex] ?? { x: 0, y: 0 };
@@ -47,7 +56,7 @@ const BONE_BINDING_U32S = 5;
 const BLEND_BINDING_FLOATS = 2;
 
 export class GpuMeshCache {
-    private cache = new Map<MeshData, CachedMeshGpuData>();
+    private cache = new Map<MeshData, Map<string, CachedMeshGpuData>>();
     private device: GPUDevice;
     private queue: GPUQueue;
     private instrumentation: GpuInstrumentationCallbacks | undefined;
@@ -58,41 +67,61 @@ export class GpuMeshCache {
         this.instrumentation = instrumentation;
     }
 
-    get(mesh: MeshData): CachedMeshGpuData | undefined {
-        return this.cache.get(mesh);
+    get(mesh: MeshData, cacheKey = GPU_MESH_RAW_BONE_BIND_CACHE_KEY): CachedMeshGpuData | undefined {
+        return this.cache.get(mesh)?.get(cacheKey);
     }
 
-    has(mesh: MeshData): boolean {
-        return this.cache.has(mesh);
+    has(mesh: MeshData, cacheKey = GPU_MESH_RAW_BONE_BIND_CACHE_KEY): boolean {
+        return this.cache.get(mesh)?.has(cacheKey) ?? false;
     }
 
-    getOrCreate(mesh: MeshData): CachedMeshGpuData {
-        let entry = this.cache.get(mesh);
+    /**
+     * Upload mesh geometry. For GPU deformation, pass {@link GpuMeshBoneBindContext} so
+     * `boneBindings.boneIndex` is remapped from mesh `boneNames` indices to skeleton array indices
+     * (matches CPU `deformMesh`).
+     */
+    getOrCreate(mesh: MeshData, boneBind?: GpuMeshBoneBindContext): CachedMeshGpuData {
+        const cacheKey = boneBind?.cacheKey ?? GPU_MESH_RAW_BONE_BIND_CACHE_KEY;
+        let byKey = this.cache.get(mesh);
+        if (!byKey) {
+            byKey = new Map();
+            this.cache.set(mesh, byKey);
+        }
+        let entry = byKey.get(cacheKey);
         if (entry) return entry;
-        entry = this._upload(mesh);
-        this.cache.set(mesh, entry);
+        entry = this._upload(mesh, boneBind?.boneNameToSkeletonIndex ?? null);
+        byKey.set(cacheKey, entry);
         return entry;
     }
 
     evict(mesh: MeshData): void {
-        const entry = this.cache.get(mesh);
-        if (!entry) return;
-        this._destroy(mesh.name, entry);
+        const byKey = this.cache.get(mesh);
+        if (!byKey) return;
+        for (const entry of byKey.values()) {
+            this._destroy(mesh.name, entry);
+        }
         this.cache.delete(mesh);
     }
 
     clear(): void {
-        for (const [mesh, entry] of this.cache) {
-            this._destroy(mesh.name, entry);
+        for (const [mesh, byKey] of this.cache) {
+            for (const entry of byKey.values()) {
+                this._destroy(mesh.name, entry);
+            }
         }
         this.cache.clear();
     }
 
     get size(): number {
-        return this.cache.size;
+        let n = 0;
+        for (const byKey of this.cache.values()) n += byKey.size;
+        return n;
     }
 
-    private _upload(mesh: MeshData): CachedMeshGpuData {
+    private _upload(
+        mesh: MeshData,
+        boneNameToSkeletonIndex: ReadonlyMap<string, number> | null,
+    ): CachedMeshGpuData {
         const vertexCount = mesh.vertices.length;
         const boundVertexCount = mesh.uvs.length;
         const label = mesh.name;
@@ -141,7 +170,21 @@ export class GpuMeshCache {
         for (let i = 0; i < boneBindingCount; i++) {
             const b = mesh.boneBindings[i];
             const o = i * BONE_BINDING_U32S;
-            bbData[o] = b.boneIndex;
+            let skelBoneIdx = b.boneIndex;
+            if (boneNameToSkeletonIndex) {
+                const boneName = mesh.boneNames[b.boneIndex];
+                if (boneName !== undefined) {
+                    const mapped = boneNameToSkeletonIndex.get(boneName);
+                    if (mapped !== undefined) {
+                        skelBoneIdx = mapped;
+                    } else {
+                        console.warn(
+                            `[gpu-mesh-cache] "${mesh.name}" binding ${i}: bone "${boneName}" not in skeleton map; using mesh boneIndex ${b.boneIndex}`,
+                        );
+                    }
+                }
+            }
+            bbData[o] = skelBoneIdx;
             bbData[o + 1] = b.firstVertex;
             bbData[o + 2] = b.vertexCount;
             bbData[o + 3] = b.firstBlendedVertex;

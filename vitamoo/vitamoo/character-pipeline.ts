@@ -96,20 +96,7 @@ export function gpuStageFallbackWarnings(
     return out;
 }
 
-/** Optional readback of GPU deformation for validation (interleaved layout). */
 export const DEFORMED_MESH_FLOATS_PER_VERTEX = 6;
-
-export interface DeformedMeshReadbackKey {
-    bodyIndex: number;
-    meshIndex: number;
-    vertexCount: number;
-}
-
-export interface DeformedMeshReadbackResult {
-    /** Interleaved: for each vertex, px py pz nx ny nz */
-    data: Float32Array;
-    vertexCount: number;
-}
 
 /**
  * An inspection tap captures the output of a pipeline step into a CPU-side
@@ -279,5 +266,142 @@ export function compareDeformedMeshCpuVsGpuInterleaved(
     return {
         positions: compareCpuVec3ToGpuInterleaved(cpuVerts, gpu, 0, epsilon),
         normals: compareCpuVec3ToGpuInterleaved(cpuNorms, gpu, 3, epsilon),
+    };
+}
+
+// GPU-first, CPU-audit comparison: the GPU writes first, then the CPU
+// checks the readback against what it would have written. No separate
+// inspection buffers — just read back the working buffer and tally stats.
+
+const BT_STRIDE = 8; // BONE_TRANSFORM_FLOATS: px py pz rx ry rz rw pad
+
+export interface BoneTransformCompareResult {
+    boneCount: number;
+    posMaxErr: number;
+    posMeanErr: number;
+    rotMaxErr: number;
+    rotMeanErr: number;
+    worstPosBone: number;
+    worstRotBone: number;
+    posExceedCount: number;
+    rotExceedCount: number;
+}
+
+/**
+ * Compare CPU bone world transforms against GPU readback (8 floats/bone flat layout).
+ * Reads from CPU Bone[].worldPosition / .worldRotation directly — no intermediate packing.
+ */
+export function compareBoneTransforms(
+    cpuBones: ReadonlyArray<{
+        worldPosition: { x: number; y: number; z: number };
+        worldRotation: { x: number; y: number; z: number; w: number };
+    }>,
+    gpu: Float32Array,
+    epsilon: number,
+): BoneTransformCompareResult {
+    const n = cpuBones.length;
+    let posMax = 0, rotMax = 0, posSum = 0, rotSum = 0;
+    let worstPos = -1, worstRot = -1;
+    let posExceed = 0, rotExceed = 0;
+
+    for (let i = 0; i < n; i++) {
+        const o = i * BT_STRIDE;
+        const wp = cpuBones[i].worldPosition;
+        const wr = cpuBones[i].worldRotation;
+
+        const px = Math.abs(wp.x - gpu[o]);
+        const py = Math.abs(wp.y - gpu[o + 1]);
+        const pz = Math.abs(wp.z - gpu[o + 2]);
+        const pe = Math.max(px, py, pz);
+        posSum += pe;
+        if (pe > posMax) { posMax = pe; worstPos = i; }
+        if (pe > epsilon) posExceed++;
+
+        const rx = Math.abs(wr.x - gpu[o + 3]);
+        const ry = Math.abs(wr.y - gpu[o + 4]);
+        const rz = Math.abs(wr.z - gpu[o + 5]);
+        const rw = Math.abs(wr.w - gpu[o + 6]);
+        const re = Math.max(rx, ry, rz, rw);
+        rotSum += re;
+        if (re > rotMax) { rotMax = re; worstRot = i; }
+        if (re > epsilon) rotExceed++;
+    }
+
+    return {
+        boneCount: n,
+        posMaxErr: posMax,
+        posMeanErr: n > 0 ? posSum / n : 0,
+        rotMaxErr: rotMax,
+        rotMeanErr: n > 0 ? rotSum / n : 0,
+        worstPosBone: worstPos,
+        worstRotBone: worstRot,
+        posExceedCount: posExceed,
+        rotExceedCount: rotExceed,
+    };
+}
+
+export interface DeformedVertexCompareResult {
+    vertexCount: number;
+    posMaxErr: number;
+    posMeanErr: number;
+    normMaxErr: number;
+    normMeanErr: number;
+    worstPosVertex: number;
+    worstNormVertex: number;
+    posExceedCount: number;
+    normExceedCount: number;
+}
+
+/**
+ * Compare CPU deformMesh output against GPU readback (6 floats/vertex interleaved).
+ * Reads from CPU Vec3[] directly — no intermediate packing buffer.
+ */
+export function compareDeformedVertices(
+    cpuVerts: ReadonlyArray<{ x: number; y: number; z: number }>,
+    cpuNorms: ReadonlyArray<{ x: number; y: number; z: number }>,
+    gpu: Float32Array,
+    epsilon: number,
+): DeformedVertexCompareResult {
+    const n = cpuVerts.length;
+    let posMax = 0, normMax = 0, posSum = 0, normSum = 0;
+    let worstPos = -1, worstNorm = -1;
+    let posExceed = 0, normExceed = 0;
+
+    for (let i = 0; i < n; i++) {
+        const o = i * STRIDE;
+        const v = cpuVerts[i];
+        const nm = cpuNorms[i];
+
+        if (v && o + 2 < gpu.length) {
+            const px = Math.abs(v.x - gpu[o]);
+            const py = Math.abs(v.y - gpu[o + 1]);
+            const pz = Math.abs(v.z - gpu[o + 2]);
+            const pe = Math.max(px, py, pz);
+            posSum += pe;
+            if (pe > posMax) { posMax = pe; worstPos = i; }
+            if (pe > epsilon) posExceed++;
+        }
+
+        if (nm && o + 5 < gpu.length) {
+            const nx = Math.abs(nm.x - gpu[o + 3]);
+            const ny = Math.abs(nm.y - gpu[o + 4]);
+            const nz = Math.abs(nm.z - gpu[o + 5]);
+            const ne = Math.max(nx, ny, nz);
+            normSum += ne;
+            if (ne > normMax) { normMax = ne; worstNorm = i; }
+            if (ne > epsilon) normExceed++;
+        }
+    }
+
+    return {
+        vertexCount: n,
+        posMaxErr: posMax,
+        posMeanErr: n > 0 ? posSum / n : 0,
+        normMaxErr: normMax,
+        normMeanErr: n > 0 ? normSum / n : 0,
+        worstPosVertex: worstPos,
+        worstNormVertex: worstNorm,
+        posExceedCount: posExceed,
+        normExceedCount: normExceed,
     };
 }

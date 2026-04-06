@@ -1,15 +1,18 @@
 # VitaMoo — `docs/`
 
-Focused notes for the **WebGPU renderer** and related roadmap. The **full stack protocol** (layers, APIs, content formats) lives in the parent **[`../DOCUMENTATION.md`](../DOCUMENTATION.md)**. **Layer refactor history** is in **[`../REFACTOR-PLAN.md`](../REFACTOR-PLAN.md)**.
+Focused notes for the **WebGPU renderer** and related roadmap. The **full stack protocol** (layers, APIs, content formats) is **[`DOCUMENTATION.md`](./DOCUMENTATION.md)**. **Layer refactor history** is **[`REFACTOR-PLAN.md`](./REFACTOR-PLAN.md)**.
 
 | File | Contents |
 |------|----------|
+| **[DOCUMENTATION.md](./DOCUMENTATION.md)** | **Full stack:** layers, APIs, content formats, hooks, build/deploy, reuse paths. |
+| **[REFACTOR-PLAN.md](./REFACTOR-PLAN.md)** | **Layer split** (phases 0–5): status, boundaries, migration narrative. |
 | **[webgpu-renderer-design.md](./webgpu-renderer-design.md)** | **Specification:** current pipeline, object-ID layout, holodeck roadmap (§4), GPU deformation (§5), WGSL overview, display-list shapes. Update this when behavior or formats change. |
 | **[webgpu-renderer-status.md](./webgpu-renderer-status.md)** | **Living status:** what is implemented vs planned, GitHub Pages deployment, file-level map, recommended next steps, out-of-scope list, links to sibling repos. |
 | **[gpu-deformation-prerequisites.md](./gpu-deformation-prerequisites.md)** | **Checklist** before starting GPU skinning work (contract, integration, fallback, profiling). |
 | **[gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md)** | Resident GPU data, readback for browser object export (sprites / BMP / IFF), glTF interchange, streamed animation from clips. |
 | **[sims-content-pipeline-notes.md](./sims-content-pipeline-notes.md)** | Historical notes on 3DS Max note tracks, the CMX Exporter, Transmogrifier/RugOMatic/ShowNTell, community content sites, and how they inform VitaMoo's browser-based tool and interchange design. |
 | **[gltf-extras-metadata.md](./gltf-extras-metadata.md)** | How VitaMoo uses glTF `extras` for the same purposes as 3DS Max note tracks: skeleton/suit/accessory tagging, bone flags, animation skill metadata, time-keyed events, content catalog data. Round-trip-safe through Blender and conformant tools. |
+| **[ui-overlay-encyclopedia.md](./ui-overlay-encyclopedia.md)** | **UI overlay reference:** selection marker, plumb-bob-style lighting, pie-menu center head, feathered shadow, **speech/thought bubbles with text** (MMO-style); formulas, timings, layout, queues; glTF for marker mesh; implementation checklist. |
 
 **Reading order:** [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for orientation, then [`webgpu-renderer-design.md`](./webgpu-renderer-design.md) for depth. Use the prerequisites doc when beginning §5 work.
 
@@ -18,7 +21,8 @@ Focused notes for the **WebGPU renderer** and related roadmap. The **full stack 
 ## Accomplishments (shipped)
 
 - **WebGPU character path:** WGSL mesh draw, depth, screen fade, plumb-bob meshes, BMP textures via `loadTexture`, object-ID pick buffer and `readObjectIdAt` (mooshow picking).
-- **CPU animation integration:** `Practice.tick` → `updateTransforms` → `deformMesh` → per-frame vertex upload; stage loop in mooshow.
+- **GPU pipeline (default path when supported):** batched compute for animation (`GpuAnimator`), deformation (`GpuDeformer`), world transform (`GpuWorldTransform`), resident skill/mesh caches; draw from GPU-deformed buffers with **CPU fallback** (`deformMesh` + `drawMesh`) when needed. See [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for the authoritative table.
+- **CPU reference path:** `Practice.tick` → `updateTransforms` → `deformMesh` remains for gameplay state, validation taps, and fallback drawing.
 - **Logging:** Renderer / texture / deform / pick noise gated behind `Renderer.create(..., { verbose: true })`, `StageConfig.verbose`, or `?vitamooVerbose=1` (default quiet).
 - **Documentation split:** One canonical **design** spec ([`webgpu-renderer-design.md`](./webgpu-renderer-design.md)), one **status/roadmap** doc ([`webgpu-renderer-status.md`](./webgpu-renderer-status.md)), and a **§5 prerequisites** checklist ([`gpu-deformation-prerequisites.md`](./gpu-deformation-prerequisites.md)). Implemented WGSL passes are summarized in **design §1.2** (not duplicated in status).
 
@@ -28,20 +32,19 @@ Focused notes for the **WebGPU renderer** and related roadmap. The **full stack 
 
 | Track | Stage |
 |-------|--------|
-| **WebGPU + characters (vitamoo + mooshow)** | **In use:** draw path, textures, picking, CPU deform. |
-| **Holodeck (design §4)** | Steps 1–3 called out as done in the design doc; **background / walls / later §4 steps not started.** |
-| **GPU skeletal deformation (§5)** | **Not started** — parallel to remaining Holodeck work. |
-| **vitamoospace (app)** | Demo host; ships to GitHub Pages when `VITAMOOSPACE_PAGES_URL` is configured. |
+| **WebGPU + characters (vitamoo + mooshow)** | **In use:** GPU animation + deform + world compute (batched), draw from GPU buffers, textures, picking; CPU deform/draw **fallback** retained. |
+| **Holodeck (design §4)** | **Not started** (terrain/floor/wall/roof pipeline). |
+| **Design §5 (GPU skeletal + animation)** | **Core path shipped**; open work is timing/observability, validation UX, automated browser GPU parity—see [`webgpu-renderer-status.md`](./webgpu-renderer-status.md). |
+| **vitamoospace (app)** | Demo host; orbit/canvas sync via `onOrbitViewChange`; ships to GitHub Pages when `VITAMOOSPACE_PAGES_URL` is configured. |
 
 ---
 
 ## TODO (next engineering work)
 
-See **[webgpu-renderer-status.md § Recommended next steps](./webgpu-renderer-status.md#recommended-next-steps)** for the two vertical slices (**Holodeck §4+** vs **§5 GPU deformation**). Short form:
+See **[webgpu-renderer-status.md](./webgpu-renderer-status.md)** (gaps, next steps, Holodeck). Short form:
 
-- **Holodeck:** background layer before characters, then walls/roofs; then lighting/highlight API exposure in mooshow; pie menu when needed.
-- **§5:** compute (or staged) deformation from bone matrices; GPU-resident deformed buffers; optional later: animation on GPU.
-- **Polish:** bone-level object IDs for sub-mesh picking (design §2.3).
+- **Holodeck §4:** background, walls/roofs, environment draw order—still the main greenfield vertical.
+- **§5 polish:** GPU pass timing in the debug UI, richer validation summaries, automated end-to-end GPU parity tests; bone-level object IDs for sub-mesh picking (design §2.3).
 
 ---
 

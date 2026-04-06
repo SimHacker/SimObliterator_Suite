@@ -16,7 +16,7 @@ This note aligns implementation choices with Sims-era authoring and runtime: **r
 
 ## Buffer and texture readback
 
-**Validation:** `Renderer.readbackDeformedMeshForValidation` supports CPU↔GPU deformation parity during development.
+**Validation:** `Renderer.readbackTap` and `Renderer.getTapBuffer` provide CPU↔GPU deformation and animation parity during development via stage-boundary tap buffers.
 
 **Authoring tools (object creation in the browser):** The same readback patterns extend to **export pipelines**:
 

@@ -18,7 +18,7 @@ flowchart TB
     direction LR
     B["MooShowStage, ContentLoader, SpinController"]
     C["picking, audio"]
-    D["Hooks: onPick, onSceneChange, onKeyAction, onPlumbBobChange…"]
+    D["Hooks: onPick, onSceneChange, onKeyAction, onOrbitViewChange…"]
   end
   subgraph core["vitamoo (core)"]
     direction LR
@@ -173,7 +173,8 @@ Optional callbacks the app can pass in `StageConfig.hooks`:
 - **`onPlumbBobChange(actorIndex, visible)`** — Plumb bob drawn for actor.
 - **`onSceneChange(sceneName | null)`** — Scene set (name) or cleared (null).
 - **`onAnimationTick(time)`** — Every frame, with current anim time.
-- **`onKeyAction(action, value?)`** — Global key: stepSceneNext/Prev, stepActorNext/Prev, stepCharacterNext/Prev, stepAnimationNext/Prev, togglePause, toggleHelp, setSpeed.
+- **`onKeyAction(action, value?)`** — Global key: stepSceneNext/Prev, stepActorNext/Prev, stepCharacterNext/Prev, stepAnimationNext/Prev, togglePause, setSpeed.
+- **`onOrbitViewChange(state)`** — Orbit camera changed from canvas input (wheel zoom, background drag rotate/tilt). `state` is `{ rotY, rotX, zoom }` in radians and the stage’s zoom factor. Use this to keep host UI (e.g. range sliders) in sync with the canvas.
 
 Implement only the ones you need; the stage merges with `defaultHooks` (no-ops).
 
@@ -182,7 +183,7 @@ Implement only the ones you need; the stage merges with `defaultHooks` (no-ops).
 - **Stage:** `createMooShowStage`, `MooShowStage`, `StageConfig`
 - **Content:** `ContentIndex`, `CharacterDef`, `SceneDef`, `CastMemberDef`, `ContentStore`
 - **Runtime types:** `Body`, `BodyMeshEntry`, `Vec3`, `TopPhysicsState`
-- **Hooks:** `MooShowHooks`, `KeyAction`
+- **Hooks:** `MooShowHooks`, `KeyAction`, `OrbitViewState`
 - **Other:** `defaultHooks`, `SpinController`, `SoundEngine`
 
 ContentLoader is used internally by the stage; its types are exported so the app can type content index and character defs.
@@ -200,7 +201,7 @@ ContentLoader is used internally by the stage; its types are exported so the app
 - **Component:** `src/lib/components/VitaMooSpace.svelte` — one component that owns the canvas, creates the stage, loads the content index, and wires:
   - Scene / Actor / Character / Animation dropdowns to `setScene`, `selectActor`, `setCharacterSolo`, `setAnimation`.
   - Bottom bar: distance presets, Rotate/Tilt/Zoom/Speed sliders, Pause, Help.
-  - Hooks: `onSceneChange`, `onSelectionChange`, `onKeyAction` to sync app state and menus.
+  - Hooks: `onSceneChange`, `onSelectionChange`, `onKeyAction`, and `onOrbitViewChange` so wheel/drag orbit updates match the bottom-bar Rotate/Tilt/Zoom sliders (controlled `value` + `oninput`, not one-way `bind:value` only).
 - **State:** `src/lib/stores/app-state.svelte.ts` — Svelte 5 runes (e.g. current scene index, actor index, character index, animation name, loading message).
 
 ### Data and assets
@@ -262,7 +263,7 @@ ContentLoader is used internally by the stage; its types are exported so the app
 
 **Goal:** Support a hybrid z-buffer, sprite, and procedural-architecture pipeline like The Sims. Render terrain, grass, floors, walls, roofs, and other architecture procedurally or from tiles; render Sims-style objects with z-buffered sprites; and run vitamoo characters (skinned meshes, animation) inside the same scene so characters live in the world. One unified stage: environment + objects + characters, with correct depth ordering and a single camera.
 
-**Rendering framework:** The vitamoo **`Renderer`** is **WebGPU** (WGSL, depth buffer, dual attachments: surface color + `rgba32uint` object IDs). Character meshes still use **CPU** `deformMesh` each frame; the GPU draws deformed vertices and writes pick ids—that path is the **first** consumer. The same framework is meant to host **additional Sims content types**, **in-app UI** (menus, pie chrome, highlights), **data visualization**, and **editor** views as further draws and passes. **Specification and roadmap:** [`docs/webgpu-renderer-design.md`](docs/webgpu-renderer-design.md) (holodeck §4, GPU deformation §5). **Implementation status and next steps:** [`docs/webgpu-renderer-status.md`](docs/webgpu-renderer-status.md). **Doc index:** [`docs/README.md`](docs/README.md).
+**Rendering framework:** The vitamoo **`Renderer`** is **WebGPU** (WGSL, depth buffer, dual attachments: surface color + `rgba32uint` object IDs). The **default mooshow path** runs **GPU** animation, deformation, and world-transform compute, then draws from GPU-resident deformed buffers; **`deformMesh` on the CPU** remains for reference, validation taps, and **fallback** when the GPU path is not used. The same framework is meant to host **additional Sims content types**, **in-app UI** (menus, pie chrome, highlights), **data visualization**, and **editor** views as further draws and passes. **Specification and roadmap:** [`webgpu-renderer-design.md`](./webgpu-renderer-design.md) (holodeck §4, GPU deformation §5). **Implementation status and next steps:** [`webgpu-renderer-status.md`](./webgpu-renderer-status.md). **Doc index:** [`README.md`](./README.md).
 
 **Object ID and layered sprites:** The main pass writes an **`rgba32uint` id attachment** (type, object id, sub-object id) alongside color; mooshow uses `readObjectIdAt` for picking. That same output can feed **RGB + alpha + z layered sprites** for authoring: render assets (OBJ, glTF, Sims-era data) into color, alpha, and depth, then use layers as z-buffered sprites in the holodeck.
 

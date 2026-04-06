@@ -309,6 +309,7 @@ export class ContentLoader {
         const skeletons = (skelData as any).skeletons;
         if (skeletons?.length) {
             body.skeleton = buildSkeleton(skeletons[0]);
+            body.skeletonBoneData = skeletons[0].bones;
             updateTransforms(body.skeleton);
         }
         if (!body.skeleton) return null;
@@ -339,7 +340,8 @@ export class ContentLoader {
 
         const animName = overrides.animation ?? char.animation;
         if (animName && body.skeleton) {
-            body.practice = await this._loadAnimation(animName, body.skeleton);
+            const practice = await this._loadAnimation(animName, body.skeleton);
+            if (practice) body.practices = [practice];
         }
         return body;
     }

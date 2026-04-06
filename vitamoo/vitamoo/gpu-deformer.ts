@@ -14,13 +14,14 @@
 import type { CachedMeshGpuData } from './gpu-mesh-cache.js';
 import type { PipelineBuffer } from './pipeline-buffer.js';
 import type { GpuInstrumentationCallbacks } from './gpu-instrumentation.js';
+import type { GpuUniformPool } from './gpu-buffer-pool.js';
 
 const DEFORM_TRANSFORM_WGSL = `
-struct BoneTransform {
-    position: vec3f,
-    rotation: vec4f, // quaternion xyzw
-    _pad: f32,
-}
+// Bone transforms: flat array<f32>, 8 floats per bone (px py pz rx ry rz rw pad).
+// Matches packBoneTransforms layout. Using flat reads avoids WGSL struct alignment
+// issues (vec3f has alignment 16, which would give a 48-byte stride instead of
+// the intended 32-byte stride from the CPU packing).
+const BONE_STRIDE = 8u;
 
 struct BoneBinding {
     boneIndex: u32,
@@ -32,7 +33,7 @@ struct BoneBinding {
 
 @group(0) @binding(0) var<storage, read> restPositions: array<f32>;
 @group(0) @binding(1) var<storage, read> restNormals: array<f32>;
-@group(0) @binding(2) var<storage, read> boneTransforms: array<BoneTransform>;
+@group(0) @binding(2) var<storage, read> boneTransforms: array<f32>;
 @group(0) @binding(3) var<storage, read> boneBindings: array<BoneBinding>;
 @group(0) @binding(4) var<storage, read_write> outDeformed: array<f32>;
 
@@ -43,6 +44,15 @@ struct Params {
     _pad: u32,
 }
 @group(0) @binding(5) var<uniform> params: Params;
+
+fn readBonePos(boneIdx: u32) -> vec3f {
+    let o = boneIdx * BONE_STRIDE;
+    return vec3f(boneTransforms[o], boneTransforms[o + 1u], boneTransforms[o + 2u]);
+}
+fn readBoneRot(boneIdx: u32) -> vec4f {
+    let o = boneIdx * BONE_STRIDE;
+    return vec4f(boneTransforms[o + 3u], boneTransforms[o + 4u], boneTransforms[o + 5u], boneTransforms[o + 6u]);
+}
 
 fn quatRotate(q: vec4f, v: vec3f) -> vec3f {
     let qv = vec4f(v, 0.0);
@@ -83,7 +93,8 @@ fn transformMain(@builtin(global_invocation_id) gid: vec3u) {
     let bbIdx = gid.x;
     if (bbIdx >= params.boneBindingCount) { return; }
     let bb = boneBindings[bbIdx];
-    let bone = boneTransforms[bb.boneIndex];
+    let bonePos = readBonePos(bb.boneIndex);
+    let boneRot = readBoneRot(bb.boneIndex);
 
     // Phase 0: bound vertices
     for (var i = 0u; i < bb.vertexCount; i++) {
@@ -91,8 +102,8 @@ fn transformMain(@builtin(global_invocation_id) gid: vec3u) {
         if (vi >= params.totalVertexCount) { break; }
         let rp = readRestPos(vi);
         let rn = readRestNorm(vi);
-        let wp = bone.position + quatRotate(bone.rotation, rp);
-        let wn = quatRotate(bone.rotation, rn);
+        let wp = bonePos + quatRotate(boneRot, rp);
+        let wn = quatRotate(boneRot, rn);
         writeDeformed(vi, wp, wn);
     }
 
@@ -102,8 +113,8 @@ fn transformMain(@builtin(global_invocation_id) gid: vec3u) {
         if (vi >= params.totalVertexCount) { break; }
         let rp = readRestPos(vi);
         let rn = readRestNorm(vi);
-        let wp = bone.position + quatRotate(bone.rotation, rp);
-        let wn = quatRotate(bone.rotation, rn);
+        let wp = bonePos + quatRotate(boneRot, rp);
+        let wn = quatRotate(boneRot, rn);
         writeDeformed(vi, wp, wn);
     }
 }
@@ -228,10 +239,15 @@ export class GpuDeformer {
         cached: CachedMeshGpuData,
         boneTransformBuffer: GPUBuffer,
         deformedOutput: GPUBuffer,
+        uniformPool?: GpuUniformPool,
     ): void {
         const device = this.device;
 
-        const transformParams = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const makeUniform = () => uniformPool
+            ? uniformPool.acquire()
+            : device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+        const transformParams = makeUniform();
         const tp = new Uint32Array([cached.boundVertexCount, cached.vertexCount, cached.boneBindingCount, 0]);
         device.queue.writeBuffer(transformParams, 0, tp);
 
@@ -254,7 +270,7 @@ export class GpuDeformer {
         transformPass.end();
 
         if (cached.blendBindingCount > 0) {
-            const blendParams = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+            const blendParams = makeUniform();
             const bp = new Uint32Array([cached.boundVertexCount, cached.vertexCount, cached.blendBindingCount, 0]);
             device.queue.writeBuffer(blendParams, 0, bp);
 

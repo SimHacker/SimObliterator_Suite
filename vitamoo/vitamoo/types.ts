@@ -106,6 +106,27 @@ export function quatNormalize(q: Quat): Quat {
     return { x: q.x / len, y: q.y / len, z: q.z / len, w: q.w / len };
 }
 
+/** Conjugate; for a unit quaternion this equals the multiplicative inverse. */
+export function quatConjugate(q: Quat): Quat {
+    return { x: -q.x, y: -q.y, z: -q.z, w: q.w };
+}
+
+// Normalized linear interpolation with hemisphere flip (MakeClosest).
+// Matches the original C++ vitaboy quaternion blending — cheaper than slerp,
+// timing distortion negligible at the Sims' high sampling rates.
+export function quatNlerp(a: Quat, b: Quat, t: number): Quat {
+    let bx = b.x, by = b.y, bz = b.z, bw = b.w;
+    if (a.x * bx + a.y * by + a.z * bz + a.w * bw < 0) {
+        bx = -bx; by = -by; bz = -bz; bw = -bw;
+    }
+    return quatNormalize({
+        x: a.x + (bx - a.x) * t,
+        y: a.y + (by - a.y) * t,
+        z: a.z + (bz - a.z) * t,
+        w: a.w + (bw - a.w) * t,
+    });
+}
+
 // "The Bone class represents a translated and rotated coordinate system.
 // Bones are assembled into a skeletal tree, in a threaded list. Each bone
 // has a name, as well as a parent name of the bone to which it's attached.

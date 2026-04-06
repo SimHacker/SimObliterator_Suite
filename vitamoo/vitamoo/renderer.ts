@@ -1,16 +1,19 @@
 // VitaMoo WebGPU renderer — draws deformed meshes with textures.
 /// <reference types="@webgpu/types" />
 
-import { Vec2, Vec3, MeshData } from './types.js';
+import { Vec2, Vec3, MeshData, type Quat } from './types.js';
 import type {
     GpuCharacterPipelineCaps,
-    DeformedMeshReadbackKey,
-    DeformedMeshReadbackResult,
 } from './character-pipeline.js';
-import { defaultGpuCharacterPipelineCaps } from './character-pipeline.js';
 import { GpuMeshCache } from './gpu-mesh-cache.js';
-import type { CachedMeshGpuData } from './gpu-mesh-cache.js';
+import type { GpuMeshBoneBindContext } from './gpu-mesh-cache.js';
 import { GpuDeformer } from './gpu-deformer.js';
+import { GpuAnimator } from './gpu-animator.js';
+import type { PracticeGpuParams } from './gpu-animator.js';
+import { GpuSkillCache } from './gpu-skill-cache.js';
+import type { CachedSkillGpuData } from './gpu-skill-cache.js';
+import { GpuWorldTransform } from './gpu-world-transform.js';
+import type { WorldTransformParams } from './gpu-world-transform.js';
 import { GpuUniformPool, GpuVertexBufferPool } from './gpu-buffer-pool.js';
 import type {
     GpuInstrumentationCallbacks,
@@ -19,7 +22,7 @@ import type {
 } from './gpu-instrumentation.js';
 import { loadTexture } from './texture.js';
 import { createDiamondMesh } from './procedural/diamond.js';
-import { transformMesh } from './display-list.js';
+import { transformMesh, transformMeshUpright } from './display-list.js';
 
 export type TextureHandle = import('./texture.js').TextureHandle;
 
@@ -352,6 +355,7 @@ function meshVertexUv(mesh: MeshData, vertexIndex: number): Vec2 {
 
 const FADE_SENTINEL = -1;
 const UNIFORM_SIZE = 256;
+const COMPUTE_UNIFORM_SIZE = 80;
 const QUAD_UNIFORM_SIZE = 32;
 const PICK_DEBUG_UNIFORM_SIZE = 256;
 
@@ -473,7 +477,11 @@ export class Renderer {
 
     private meshCache: GpuMeshCache | null = null;
     private gpuDeformer: GpuDeformer | null = null;
+    private gpuAnimator: GpuAnimator | null = null;
+    private gpuSkillCache: GpuSkillCache | null = null;
+    private gpuWorldTransform: GpuWorldTransform | null = null;
     private meshUniformPool: GpuUniformPool | null = null;
+    private computeUniformPool: GpuUniformPool | null = null;
     private pickUniformPool: GpuUniformPool | null = null;
     private vertexPool: GpuVertexBufferPool | null = null;
 
@@ -761,7 +769,11 @@ export class Renderer {
 
         this.meshCache = new GpuMeshCache(this.device, this.queue, this.options.instrumentation);
         this.gpuDeformer = new GpuDeformer(this.device, this.options.instrumentation);
+        this.gpuAnimator = new GpuAnimator(this.device, this.options.instrumentation);
+        this.gpuSkillCache = new GpuSkillCache(this.device, this.queue, this.options.instrumentation);
+        this.gpuWorldTransform = new GpuWorldTransform(this.device, this.options.instrumentation);
         this.meshUniformPool = new GpuUniformPool(this.device, UNIFORM_SIZE, 'mesh-uniform', 32);
+        this.computeUniformPool = new GpuUniformPool(this.device, COMPUTE_UNIFORM_SIZE, 'compute-uniform', 16);
         this.pickUniformPool = new GpuUniformPool(this.device, PICK_DEBUG_UNIFORM_SIZE, 'pick-uniform', 32);
         this.vertexPool = new GpuVertexBufferPool(this.device, 'draw-vertex');
     }
@@ -776,9 +788,162 @@ export class Renderer {
         return this.gpuDeformer;
     }
 
+    /** GPU compute animator. Null before init. */
+    getGpuAnimator(): GpuAnimator | null {
+        return this.gpuAnimator;
+    }
+
+    /** GPU-resident skill/animation data cache. Null before init. */
+    getGpuSkillCache(): GpuSkillCache | null {
+        return this.gpuSkillCache;
+    }
+
+    /** GPU compute world transform (body rotation + position + optional pre-rotation). Null before init. */
+    getGpuWorldTransform(): GpuWorldTransform | null {
+        return this.gpuWorldTransform;
+    }
+
     /** Expose device for PipelineBuffer.ensureGpu / ensureCpu from stage code. */
     getDevice(): GPUDevice { return this.device; }
     getQueue(): GPUQueue { return this.queue; }
+
+    /** Create a command encoder for batching multiple compute passes. */
+    createComputeEncoder(): GPUCommandEncoder {
+        return this.device.createCommandEncoder();
+    }
+
+    /** Submit a batched command encoder after all compute passes are encoded. */
+    submitComputeEncoder(encoder: GPUCommandEncoder): void {
+        this.queue.submit([encoder.finish()]);
+    }
+
+    encodeMultiPracticeGpuInit(
+        encoder: GPUCommandEncoder,
+        hierarchyBuffer: GPUBuffer,
+        localPosesBuffer: GPUBuffer,
+        prioritiesBuffer: GPUBuffer,
+        boneCount: number,
+    ): boolean {
+        if (!this.gpuAnimator) return false;
+        this.gpuAnimator.encodeInit(
+            encoder,
+            hierarchyBuffer,
+            localPosesBuffer,
+            prioritiesBuffer,
+            boneCount,
+            this.computeUniformPool ?? undefined,
+        );
+        return true;
+    }
+
+    encodeMultiPracticeGpuApply(
+        encoder: GPUCommandEncoder,
+        cached: CachedSkillGpuData,
+        params: PracticeGpuParams,
+        localPosesBuffer: GPUBuffer,
+        prioritiesBuffer: GPUBuffer,
+    ): boolean {
+        if (!this.gpuAnimator) return false;
+        this.gpuAnimator.encodeApplyPractice(
+            encoder,
+            cached,
+            params,
+            localPosesBuffer,
+            prioritiesBuffer,
+            this.computeUniformPool ?? undefined,
+        );
+        return true;
+    }
+
+    encodeMultiPracticeGpuPropagate(
+        encoder: GPUCommandEncoder,
+        localPosesBuffer: GPUBuffer,
+        hierarchyBuffer: GPUBuffer,
+        depthOrderBuffer: GPUBuffer,
+        depthOffsetsBuffer: GPUBuffer,
+        worldTransformOutput: GPUBuffer,
+        boneCount: number,
+        depthLayerCount: number,
+    ): boolean {
+        if (!this.gpuAnimator) return false;
+        this.gpuAnimator.encodePropagate(
+            encoder,
+            localPosesBuffer,
+            hierarchyBuffer,
+            depthOrderBuffer,
+            depthOffsetsBuffer,
+            worldTransformOutput,
+            boneCount,
+            depthLayerCount,
+            this.computeUniformPool ?? undefined,
+        );
+        return true;
+    }
+
+    /**
+     * Encode deformation compute onto an external encoder (for batching).
+     * Returns the persistent deformed output GPUBuffer, or null.
+     */
+    encodeDeformMeshGpu(
+        encoder: GPUCommandEncoder,
+        mesh: MeshData,
+        boneTransformBuffer: GPUBuffer,
+        boneBind: GpuMeshBoneBindContext,
+    ): GPUBuffer | null {
+        if (!this.gpuDeformer || !this.meshCache) return null;
+        const cached = this.meshCache.getOrCreate(mesh, boneBind);
+        this.gpuDeformer.encode(encoder, cached, boneTransformBuffer, cached.deformedOutput, this.computeUniformPool ?? undefined);
+        return cached.deformedOutput;
+    }
+
+    /**
+     * Encode world transform compute onto an external encoder (for batching).
+     * Modifies deformedBuffer in-place. Skipped for identity transforms.
+     */
+    encodeWorldTransformGpu(
+        encoder: GPUCommandEncoder,
+        deformedBuffer: GPUBuffer,
+        params: WorldTransformParams,
+    ): void {
+        if (!this.gpuWorldTransform || GpuWorldTransform.isIdentity(params)) return;
+        this.gpuWorldTransform.encode(encoder, deformedBuffer, params, this.computeUniformPool ?? undefined);
+    }
+
+    // Tap buffers: lazy MAP_READ buffers for pipeline stage validation.
+    // Each tap captures a snapshot of a working buffer at a stage boundary
+    // via copyBufferToBuffer in the same encoder — no pipeline branching.
+    private _tapBuffers = new Map<string, GPUBuffer>();
+
+    /**
+     * Get or create a MAP_READ tap buffer. Use with encoder.copyBufferToBuffer
+     * to snapshot a pipeline stage output. Readback with readbackTap().
+     */
+    getTapBuffer(key: string, bytes: number): GPUBuffer {
+        let buf = this._tapBuffers.get(key);
+        if (!buf || buf.size < bytes) {
+            buf?.destroy();
+            buf = this.device.createBuffer({
+                label: `tap:${key}`,
+                size: bytes,
+                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+            });
+            this._tapBuffers.set(key, buf);
+        }
+        return buf;
+    }
+
+    /**
+     * Async readback of a tap buffer captured during the last frame's compute encoder.
+     * Stalls CPU until GPU completes — only call for periodic validation, not every frame.
+     */
+    async readbackTap(key: string): Promise<Float32Array | null> {
+        const buf = this._tapBuffers.get(key);
+        if (!buf) return null;
+        await buf.mapAsync(GPUMapMode.READ);
+        const data = new Float32Array(buf.getMappedRange()).slice();
+        buf.unmap();
+        return data;
+    }
 
     setViewport(x: number, y: number, w: number, h: number): void {
         this.viewport = { x, y, w, h };
@@ -884,6 +1049,7 @@ export class Renderer {
         this.meshUniformPool?.resetFrame();
         this.pickUniformPool?.resetFrame();
         this.vertexPool?.resetFrame();
+        this.computeUniformPool?.resetFrame();
     }
 
     private _beginPass(clearColor: GPUColor | null): void {
@@ -1231,6 +1397,7 @@ export class Renderer {
         size: number, rotY: number,
         r: number, g: number, b: number, alpha = 1.0,
         objectId?: { type: ObjectIdType; objectId: number; subObjectId?: number },
+        cancelBoneWorldRotation?: Quat,
     ): void {
         const effectiveSize = size * this.plumbBobScale;
         const meshes = this.plumbBobMeshes?.length
@@ -1245,7 +1412,9 @@ export class Renderer {
         this.meshSolidVertexPass = true;
         try {
             for (const mesh of meshes) {
-                const { vertices, normals } = transformMesh(mesh, x, y, z, rotY, effectiveSize);
+                const { vertices, normals } = cancelBoneWorldRotation
+                    ? transformMeshUpright(mesh, x, y, z, cancelBoneWorldRotation, rotY, effectiveSize)
+                    : transformMesh(mesh, x, y, z, rotY, effectiveSize);
                 this.drawMesh(mesh, vertices, normals, null, objectId);
             }
         } finally {
@@ -1318,34 +1487,28 @@ export class Renderer {
      */
     getGpuCharacterPipelineCaps(): GpuCharacterPipelineCaps {
         return {
-            animation: false,
+            animation: this.gpuAnimator !== null && this.gpuSkillCache !== null,
             deformation: this.gpuDeformer !== null,
             rasterization: true,
         };
     }
 
-    /**
-     * Run GPU compute deformation for a mesh. Returns a GPUBuffer with 6 floats/vertex
-     * (px py pz nx ny nz) that drawMeshFromGpuBuffer can use, or null if GPU deformation
-     * is not available.
-     *
-     * The returned buffer is owned by the caller and must be destroyed after the frame.
-     */
-    /**
-     * Run GPU compute deformation for a mesh. Returns the persistent deformed output buffer
-     * from the mesh cache (6 floats/vertex: px py pz nx ny nz). The buffer is reused every
-     * frame — do not destroy it.
-     */
-    deformMeshGpu(
-        mesh: MeshData,
-        boneTransformBuffer: GPUBuffer,
-    ): GPUBuffer | null {
-        if (!this.gpuDeformer || !this.meshCache) return null;
-        const cached = this.meshCache.getOrCreate(mesh);
-        const encoder = this.device.createCommandEncoder();
-        this.gpuDeformer.encode(encoder, cached, boneTransformBuffer, cached.deformedOutput);
-        this.queue.submit([encoder.finish()]);
-        return cached.deformedOutput;
+    getGpuLimits(): {
+        maxBufferSize: number;
+        maxStorageBufferBindingSize: number;
+        maxUniformBufferBindingSize: number;
+        maxComputeInvocationsPerWorkgroup: number;
+        maxComputeWorkgroupSizeX: number;
+        maxComputeWorkgroupsPerDimension: number;
+    } {
+        return {
+            maxBufferSize: this.device.limits.maxBufferSize,
+            maxStorageBufferBindingSize: this.device.limits.maxStorageBufferBindingSize,
+            maxUniformBufferBindingSize: this.device.limits.maxUniformBufferBindingSize,
+            maxComputeInvocationsPerWorkgroup: this.device.limits.maxComputeInvocationsPerWorkgroup,
+            maxComputeWorkgroupSizeX: this.device.limits.maxComputeWorkgroupSizeX,
+            maxComputeWorkgroupsPerDimension: this.device.limits.maxComputeWorkgroupsPerDimension,
+        };
     }
 
     /**
@@ -1359,9 +1522,10 @@ export class Renderer {
         deformedBuffer: GPUBuffer,
         texture: TextureHandle | null = null,
         objectId?: { type: ObjectIdType; objectId: number; subObjectId?: number },
+        boneBind?: GpuMeshBoneBindContext,
     ): void {
         if (!this.currentPass) this._beginPass(null);
-        const cached = this.meshCache?.getOrCreate(mesh);
+        const cached = this.meshCache?.getOrCreate(mesh, boneBind);
         if (!cached) return;
 
         const textureValid = texture != null && typeof (texture as GPUTexture).createView === 'function';
@@ -1428,27 +1592,4 @@ export class Renderer {
         this.currentPass!.drawIndexed(cached.indexCount);
     }
 
-    /**
-     * Read back GPU deformation output for validation against CPU `deformMesh`.
-     * Pass the GPUBuffer returned by deformMeshGpu.
-     */
-    async readbackDeformedMeshForValidation(
-        key: DeformedMeshReadbackKey,
-        deformedBuffer?: GPUBuffer,
-    ): Promise<DeformedMeshReadbackResult | null> {
-        if (!deformedBuffer) return null;
-        const byteSize = key.vertexCount * 6 * 4;
-        const staging = this.device.createBuffer({
-            size: byteSize,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-        });
-        const encoder = this.device.createCommandEncoder();
-        encoder.copyBufferToBuffer(deformedBuffer, 0, staging, 0, byteSize);
-        this.queue.submit([encoder.finish()]);
-        await staging.mapAsync(GPUMapMode.READ);
-        const data = new Float32Array(staging.getMappedRange()).slice();
-        staging.unmap();
-        staging.destroy();
-        return { data, vertexCount: key.vertexCount };
-    }
 }

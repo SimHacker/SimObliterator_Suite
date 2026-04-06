@@ -1,4 +1,5 @@
 import type { Body } from '../runtime/types.js';
+import { MOO_SHOW_VERTICAL_FOV_DEG } from '../camera-defaults.js';
 
 export function perspectiveMatrix(fov: number, aspect: number, near: number, far: number): Float32Array {
     const f = 1.0 / Math.tan(fov * Math.PI / 360);
@@ -68,7 +69,7 @@ export function pickActorAtScreen(
     const mx = screenX - canvasRect.left;
     const my = screenY - canvasRect.top;
     const dist = zoom / 10;
-    const fov = 50;
+    const fov = MOO_SHOW_VERTICAL_FOV_DEG;
     const aspect = canvasWidth / canvasHeight;
 
     const rotYRad = rotYDeg * Math.PI / 180;

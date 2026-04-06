@@ -32,7 +32,7 @@ All GPU drawing lives in **vitamoo** (`Renderer`); **mooshow** orchestrates it f
 1. ~~WebGPU parity + setViewport + loader texture factory~~ — **done**.
 2. ~~Object-ID in the main pass + `readObjectIdAt` + mooshow picking~~ — **done** (single pass, not a separate object-ID pass).
 3. **Holodeck / advanced:** Background layer, terrain, walls, UI (§4 steps 4–8).
-4. **GPU deformation / animation (§5):** Parallel track; not started.
+4. **GPU deformation / animation (§5):** Baseline implemented; next work is scaling and robustness.
 
 ---
 
@@ -113,6 +113,15 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 - **Shadows:** “Drop shadow” behind the pie: draw the pie shape (or a rounded rect) slightly offset and blurred (or with a soft edge) in a dark color, then draw the pie on top. Can be a simple soft quad or a small blur in a shader (e.g. 4-tap or 9-tap blur on a small texture). All of this can live in one “UI overlay” pass with 2–3 draws: desaturated bg, feather, shadow, then menu content.
 - **Head in pie menu:** The character animation system already supports rendering only the head (e.g. head mesh/suit in local or bone-local coordinates, as in the original vitaboy “drawing the people's heads in the center of the pie menu”). The WebGPU renderer reuses the same mesh pipeline: draw the head mesh with the appropriate camera and transform so the Sim’s head appears in the center of the pie. No new shader; just a dedicated draw call with head-only geometry and optional scale/position for the menu.
 
+**Numeric reference:** Selection marker, pie-menu head, feathered desaturated shadow, and **speech / thought bubbles with text** are specified in **[ui-overlay-encyclopedia.md](./ui-overlay-encyclopedia.md)** (§1–§4: spin, lighting, shadow math, bubble layout, queue, multiplayer-oriented timing, rendering strategy options).
+
+### 3.9.1 Speech and thought bubbles (MMO-style text)
+
+- **Layer:** Draw after the character pass (and typically after or beside other HUD). Bubbles are **screen-anchored** from a **world head point** projected each frame; they usually **do not** write the object-ID pick buffer unless a feature explicitly needs hit testing on text.
+- **Content:** `utf8Text`, channel (**speech** vs **thought** vs optional **system**), per-line TTL, queue per speaker, fade in/out. See encyclopedia §4 for wrap widths, zoom scaling, and rate limits.
+- **Text implementation:** Prefer an **HTML overlay** or **2D canvas** on top of the WebGPU canvas for v1 (layout, fonts, RTL). Optional later: MSDF or baked texture quads for a fully GPU path.
+- **Chrome:** Nine-slice or tessellated SVG-style shapes; distinct art for **speech** (tail) vs **thought** (cloud).
+
 ### 3.10 Summary table
 
 | Feature | Where it lives | Notes |
@@ -129,9 +138,12 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 | Pie menu feather | Fullscreen quad | Radial alpha / vignette |
 | Pie menu shadow | Fullscreen / quad | Soft drop shadow behind menu |
 | Pie menu head | Mesh (existing) | Head-only render in center; animation system already supports it |
+| Speech / thought bubbles | DOM, canvas2d, or GPU quads + text atlas | Screen-anchored from head projection; queue + TTL; encyclopedia §4 |
 | Censorship (bbox pixelization) | Post-process and/or mesh pass + ID/depth | §3.11 — projected mesh/bone bounds → mosaic/pixelize region |
 
 ### 3.11 Censorship: mesh bounding-box pixelization
+
+**VitaBoy / Sims fidelity:** The shipped game used **censor-type suits** (mesh pieces such as bone-attached boxes) whose vertices are **transformed to screen space** to build a **2D bounding rect**, then the **2D compositor pixelated** those regions over the frame—the meshes were not shown as normal textured draws. A concrete implementation plan (layering, difficulty, in-repo references) lives in **[webgpu-renderer-status.md — Planned: VitaBoy-style censorship](./webgpu-renderer-status.md#planned-vitaboy-style-censorship-not-started)**.
 
 **Goal:** Policy-driven **moderation** of what the viewer shows—without full body segmentation—by **pixelizing or mosaicking** only the pixels covered by **mesh (or bone-attached) axis-aligned or oriented bounds** once projected to screen space.
 
@@ -161,75 +173,92 @@ Goal: push as much Sims-style look and feel into shaders as we can (performance,
 6. **Lighting** — directional + ambient already in WGSL; expose and tune from mooshow (public setters if missing).
 7. **Highlight / selection / feedback** — highlight uniform exists in shader; wire hover/selected ids from stage and add API on `Renderer` if needed; optional small overlay pass.
 8. **Pie menu** (desaturated bg, feather, shadow) when the app adds a pie UI.
-9. **Censorship / bbox pixelization** (§3.11) when moderation or safe-stream requirements land—likely after object-ID + optional post-process path is stable.
+9. **Speech / thought bubbles** (head-anchored text, queue, TTL) when the app adds MMO-style chat or dialogue over the lot — [ui-overlay-encyclopedia.md](./ui-overlay-encyclopedia.md) §4 and §3.9.1.
+10. **Censorship / bbox pixelization** (§3.11) when moderation or safe-stream requirements land—likely after object-ID + optional post-process path is stable.
 
 **Parallel track — performance (§5)**  
-Not scheduled inside steps 4–8: **GPU-side deformation** (then optional full GPU animation). Reduces per-frame vertex upload; large win for crowds. Starts only when someone takes §5 as the active task.
+Baseline GPU deformation and multi-practice animation are in place. Current work on this track is scale-up: cross-body batching, better kernel parallelism, and tighter validation/perf telemetry.
 
 ---
 
-## 5. Advanced goal: GPU-side skeletal deformation
+## 5. GPU-side deformation and animation
 
-**Idea:** Upload all undeformed character meshes and skeletons to the GPU once; run skeletal mesh deformation (and ideally animation) on the GPU; render from the resulting mesh state without streaming deformed vertices back from the CPU each frame. We can put the animations on the GPU too — keyframes or motion curves resident in buffers/textures, so the GPU evaluates pose from a time uniform and then deforms. No per-frame animation or skeleton data from the CPU.
+Baseline GPU deformation and multi-practice animation are implemented. This
+section now tracks what is shipping and what still needs to be optimized.
 
-### 5.1 Current divide
+### 5.1 Implemented baseline
 
-Today the CPU owns the pipeline: `updateTransforms(bones)` and `deformMesh(mesh, bones, boneMap)` produce deformed vertices and normals in JS; the renderer uploads those to the GPU every frame and draws. Mesh and skeleton data live in CPU memory; only the final deformed buffers are sent to the GPU each frame.
+- **Resident mesh data:** `GpuMeshCache` keeps rest positions/normals, UVs, index
+  buffers, bone bindings, blend bindings, and persistent deformed outputs.
+- **Resident skill data:** `GpuSkillCache` uploads translations, rotations, motion
+  metadata, hierarchy, topological order, depth-layer order/offsets, and per-bone
+  capability flags. Keyed by `(SkillData, skeleton signature)` to prevent
+  cross-skeleton cache collisions.
+- **GPU animation:** `GpuAnimator` runs
+  `initPoses -> applyPractice xN -> propagateHierarchy`, consuming a list of active
+  practices sorted by priority.
+- **GPU deformation:** `GpuDeformer` executes VitaBoy-style phase 0 / phase 1 /
+  blend compute passes.
+- **GPU world transform:** `GpuWorldTransform` applies body direction/position/top
+  physics after deformation.
+- **Validation taps:** optional stage-boundary tap buffers provide CPU-vs-GPU
+  audit points for animation and deformation.
 
-### 5.2 Target: data on GPU, animate on GPU
+### 5.2 Current CPU vs GPU responsibilities
 
-- **Upload once (or at load):** For each character, upload to GPU and keep there:
-  - **Undeformed mesh:** positions, normals, UVs, indices; plus **bone bindings** (per-bone: firstVertex, vertexCount, firstBlendedVertex, blendedVertexCount) and **blend bindings** (otherVertexIndex, weight). These are static per mesh.
-  - **Skeleton:** hierarchy (parent indices or structure), rest pose (local position, rotation per bone). Static per character.
-  - **Animation data (optional):** Keyframes or motion curves per bone (translation, rotation over time) so the GPU can derive current pose from a time uniform.
-- **Animate on GPU:** Two possible levels:
-  - **Option A — Deformation only on GPU:** CPU still runs `Practice.tick` and computes bone world poses each frame; upload only the current bone matrices (or position+rotation) to a uniform/storage buffer. A **compute shader** (or vertex shader, if we restructure — see below) performs the same Phase 0 / Phase 1 / Blend logic as `deformMesh`, writing deformed positions and normals to a GPU buffer. The render pass then draws from that buffer. No deformed data leaves the GPU; only a small bone-matrix upload per frame.
-  - **Option B — Full GPU animation:** Time (and maybe skill/sequence ID) is uploaded each frame. A **compute shader** evaluates animation (keyframe interpolation, or sample from textures) to produce bone world matrices, then runs the same deformation logic and writes deformed mesh buffer. No per-frame skeleton or mesh data from CPU; only time (and optionally a few parameters).
-- **Render from GPU output:** The mesh draw uses the buffer filled by the deformation pass (positions, normals; UVs and indices are unchanged). One compute pass per character (or batched), then one draw per character from the deformed buffer. No readback of deformed vertices to CPU.
+| Data / step | Current owner | Notes |
+|-------------|---------------|-------|
+| Skeleton logic (`applyPractices`, `updateTransforms`) | CPU | Still used for gameplay-facing state and reference behavior. |
+| Animation evaluation for render path | GPU (optional backend) | Uses practice elapsed/weight/priority from runtime state. |
+| Mesh deformation | GPU (optional backend) | Draw path can consume GPU deformed buffers directly. |
+| Body/world transform | GPU (optional backend) | Per-mesh post-deformation pass. |
+| Deformation fallback | CPU | Reference path remains for unsupported/forced CPU stages. |
+| Validation comparisons | CPU | Readback on configurable cadence; not in hot path by default. |
 
-So yes: we can download (upload) all undeformed meshes and skeletons to the GPU and leave them there; then animate and deform on the GPU and render from that state.
+### 5.3 Completed optimization work
 
-### 5.3 Implementing the current deformation model on GPU
+1. **Cross-body phase batching:** all bodies are init/apply/propagated in a single
+   batched compute encoder per frame. Apply passes are skill-bucketed within each
+   priority layer so bodies sharing a skill dispatch together.
+2. **Parallel kernels:** init is per-bone parallel, apply is per-motion parallel,
+   propagate is depth-layer parallel (one dispatch per hierarchy depth, all bones
+   at that depth run in parallel).
+3. **Bind-group caching:** `GpuAnimator` maintains bounded caches for init, apply,
+   and propagate bind groups keyed by buffer identity. Skill bucketing maximizes
+   cache hit rate on the apply path.
+4. **Cache correctness:** skill cache keys include a full skeleton signature
+   (bone names, hierarchy, capability flags, name-to-index mapping) preventing
+   cross-skeleton collisions.
 
-The vitamoo deformation model (see `skeleton.ts`) is:
+### 5.4 Remaining performance constraints
 
-- **Phase 0:** Each bone transforms its “bound” vertices (position and normal) by its world position and rotation.
-- **Phase 1:** Each bone transforms its “blended” vertices (stored at offset `boundCount` in the vertex array).
-- **Blend:** Each blend binding lerps a blended vertex into a bound vertex: `destVert = lerp(destByBoneA, blendByBoneB, weight)` (and same for normals, normalized).
+- Per-practice uniform writes still happen every frame (one `writeBuffer` per
+  body per practice layer). Could be reduced by packing multiple bodies into one
+  buffer with offsets, but the current overhead is small.
+- Propagation still issues multiple depth passes per body (typically 5-8 for
+  Sims skeletons). These are very cheap individually but add up at extreme
+  character counts.
 
-This is not the usual per-vertex “bone indices + weights” skinning; it’s bone-ranged and then a blend pass. It maps cleanly to a **compute shader**:
+### 5.5 Next optimization targets
 
-- **Input buffers (read-only, resident on GPU):** undeformed vertices/normals, bone bindings (bone index, firstVertex, vertexCount, firstBlendedVertex, blendedVertexCount), blend bindings (otherVertexIndex, weight), and per-frame bone world matrices (position.xyz + rotation quat or 3×3).
-- **Output buffer (write):** deformed positions and normals (same layout as current `drawMesh` input).
-- **Dispatch:** One thread per vertex (or per binding range); implement Phase 0 and Phase 1 by having each thread know which bone(s) affect it, then a second pass or same pass with careful ordering for the blend step. (Blend reads from and writes to the same buffer, so either two buffers ping-pong or structure the blend so writes don’t conflict — e.g. blend bindings write into bound vertex indices, which are not written in the blend phase.)
+1. **GPU timing instrumentation:** add pass-level timestamps to measure actual
+   GPU cost of animation/deformation/world transform phases.
+2. **Packed multi-body uniform buffers:** reduce `writeBuffer` calls by packing
+   per-body practice params into a single storage buffer read by offset.
+3. **Validation/perf telemetry:** richer per-body compare metrics and buffer-usage
+   diagnostics in the debug panel.
 
-Alternatively, we could **pre-convert** the mesh to a conventional format (e.g. per-vertex up to N bone indices and weights) and use **vertex-shader skinning**; that would require a one-time conversion and might approximate the current blend behavior rather than match it exactly.
+### 5.6 Expected scaling trajectory
 
-### 5.4 What stays on CPU vs GPU
-
-| Data | Today | Advanced (GPU deformation) |
-|------|--------|-----------------------------|
-| Undeformed mesh (verts, norms, UVs, indices, bone/blend bindings) | CPU | GPU (upload once) |
-| Skeleton (rest pose, hierarchy) | CPU | GPU (upload once) |
-| Animation (motions, keyframes) | CPU | Optional: GPU (for Option B) |
-| Current bone poses (world position, rotation) | CPU every frame | Option A: CPU computes, upload matrices. Option B: GPU computes from time. |
-| Deformed vertices/normals | CPU every frame → upload | GPU only (compute output → render input) |
-
-### 5.5 Benefits
-
-- **No per-frame vertex upload:** Deformed mesh stays on GPU; only small uniform/buffer updates (bone matrices or time).
-- **Scalability:** Many characters mean many small compute dispatches and draws, not huge CPU→GPU vertex streams.
-- **Pipeline clarity:** Load → upload assets once; each frame: update pose (or time), run deformation, draw. Same mental model as “holodeck”: static and skinned data on GPU, animate on that side of the divide.
-
-### 5.6 How many characters could animate at once?
-
-With the **current CPU pipeline** (deform in JS, upload deformed verts every frame), the limit is CPU cost per character (deformMesh + building buffers) and the bus (upload size × character count). For Sims-style meshes (hundreds to a few thousand verts each), **tens to low hundreds** of characters is typical before frame time or upload becomes the bottleneck.
-
-With **full GPU** (Option B: animations + deformation on GPU, only time or a tiny uniform set per character per frame):
-
-- **CPU** does almost nothing per character: no `Practice.tick`, no `deformMesh`, no vertex upload — just submit compute + draw and maybe update a time or sequence ID.
-- **GPU** does: one (or batched) compute pass to evaluate animation → bone matrices, then deformation → deformed buffer, then draw. Compute and draw scale with GPU parallelism; vertex and bone counts per character are small by modern standards.
-- **Practical limits** then shift to: **draw calls** (hundreds to a few thousand is fine with batching or multi-draw), **fill rate** (how many pixels of characters on screen), **GPU memory** (all undeformed meshes, skeletons, and animation data resident). Sims-style characters are light: a few KB of mesh + a few dozen bones + keyframes per skill. So **hundreds to thousands** of characters animating at once is in reach on typical hardware — the kind of crowd or busy neighbourhood that would bring a CPU-bound pipeline to its knees. The exact number depends on mesh complexity, resolution, and batching strategy, but the order of magnitude jumps from "tens–hundreds" to "hundreds–thousands" once animation and deformation live on the GPU.
+- **Current state:** single-submit phase-batched pipeline with parallel kernels,
+  bind-group caching, and skill bucketing. Per-frame CPU work per character is
+  minimal (practice param writes + bind-group lookups).
+- **Practical limits:** GPU memory (all mesh + skill data resident), vertex
+  throughput (deformation + world transform per mesh), and draw call count.
+  Sims-style characters are light (~1-3K verts, ~20 bones); hundreds to
+  thousands of concurrently animated characters are feasible.
+- **Long horizon:** same GPU-resident pipeline model extends to broader scene
+  composition and display-list execution.
 
 ---
 

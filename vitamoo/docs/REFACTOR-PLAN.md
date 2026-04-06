@@ -1,19 +1,21 @@
 # VitaMoo Refactor Plan
 
+**Layer refactor (phases 0–5 below): complete.** The split into vitamoo / mooshow / vitamoospace is shipped; GitHub Pages builds the SvelteKit app. What is left is **feature roadmap** (Holodeck, renderer polish, tooling)—not unfinished refactor phases. For the live GPU/CPU pipeline and next engineering steps, use **[webgpu-renderer-status.md](./webgpu-renderer-status.md)**.
+
 ## Refactor status
 
 | Phase | Status | Notes |
 |-------|--------|--------|
 | **0** Setup and baseline | Done | mooshow + vitamoospace exist; pnpm filters in use. |
 | **1** Extract runtime state | Done | Stage has bodies, selectedActor, setScene, setCharacterSolo, ContentLoader, animation loop. |
-| **2** Rendering and hooks | Done | Hooks (onPick, onHover, onSelectionChange, onHighlight, onPlumbBobChange, etc.), picking, SpinController, SoundEngine. |
+| **2** Rendering and hooks | Done | Hooks (onPick, onHover, onSelectionChange, onHighlight, onPlumbBobChange, onOrbitViewChange, etc.), picking, SpinController, SoundEngine. |
 | **3** VitaMooSpace.svelte | Done | Single full-page component, scene/actor/character/animation controls, loads `/data/content.json`, api/health placeholder. |
 | **4** GitHub Pages | Done | `.github/workflows/pages.yml` builds vitamoo → mooshow → vitamoospace and deploys `vitamoospace/build`. Deploy runs only when `VITAMOOSPACE_PAGES_URL` is set (variable or secret) on that repository. |
 | **5** Cleanup and parity | Done | Legacy standalone `demo/` removed. Verbose logging gated (`Renderer.create` / `StageConfig.verbose` / `?vitamooVerbose=1`). `vitamoospace/.gitignore` ignores `.svelte-kit` and `node_modules`. Optional: parity write-up and monorepo migration notes for contributors who want them. |
 
 Definition of Done: items 1–5 are met for shipping layers (core, mooshow, vitamoospace, Pages, quiet default console).
 
-**Beyond Phase 5:** Holodeck (§4 in [`docs/webgpu-renderer-design.md`](docs/webgpu-renderer-design.md)) and **GPU skeletal deformation** (§5, parallel track). Status and roadmap: [`docs/webgpu-renderer-status.md`](docs/webgpu-renderer-status.md). Prerequisites before §5: [`docs/gpu-deformation-prerequisites.md`](docs/gpu-deformation-prerequisites.md). Further-out: RGB+alpha+z layered sprites from 3D for object tooling, save file viewing/editing.
+**Beyond Phase 5 (not refactor backlog):** **Holodeck** (design §4 in [`webgpu-renderer-design.md`](./webgpu-renderer-design.md))—terrain/floor/wall/roof pipeline—is still **not started**. **Design §5** (GPU animation, deformation, world transform, batched compute, validation taps) is **largely implemented** in code; remaining gaps are observability, UX, and automated GPU end-to-end parity—see [`webgpu-renderer-status.md`](./webgpu-renderer-status.md). The [`gpu-deformation-prerequisites.md`](./gpu-deformation-prerequisites.md) checklist remains the contract reference for regressions. Further-out: RGB+alpha+z layered sprites for object tooling, save viewing/editing.
 
 ---
 

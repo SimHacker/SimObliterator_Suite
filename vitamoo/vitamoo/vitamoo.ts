@@ -7,6 +7,8 @@
 export {
     Vec2, Vec3, Quat, Bone, SkeletonData, MeshData, SuitData, SkillData,
     MotionData, BoneData, SkinData, BoneBinding, BlendBinding, Face, CMXFile,
+    quatNlerp,
+    quatConjugate,
 } from './types.js';
 
 export {
@@ -34,19 +36,21 @@ export {
     compareInspectionTaps,
     compareCpuVec3ToGpuInterleaved,
     compareDeformedMeshCpuVsGpuInterleaved,
+    compareBoneTransforms,
+    compareDeformedVertices,
     DEFORMED_MESH_FLOATS_PER_VERTEX,
 } from './character-pipeline.js';
 export type {
     PipelineStageBackend,
     CharacterPipelineStages,
     GpuCharacterPipelineCaps,
-    DeformedMeshReadbackKey,
-    DeformedMeshReadbackResult,
     PipelineValidationSettings,
     PipelineInspectionTaps,
     InspectionTap,
     Float32BatchCompareResult,
     DeformationCompareSummary,
+    BoneTransformCompareResult,
+    DeformedVertexCompareResult,
 } from './character-pipeline.js';
 
 export {
@@ -60,10 +64,16 @@ export {
 } from './pipeline-buffer.js';
 export type { PipelineBufferAuthority, PipelineBufferOptions } from './pipeline-buffer.js';
 
-export { GpuMeshCache } from './gpu-mesh-cache.js';
-export type { CachedMeshGpuData } from './gpu-mesh-cache.js';
+export { GpuMeshCache, GPU_MESH_RAW_BONE_BIND_CACHE_KEY } from './gpu-mesh-cache.js';
+export type { CachedMeshGpuData, GpuMeshBoneBindContext } from './gpu-mesh-cache.js';
 
 export { GpuDeformer } from './gpu-deformer.js';
+export { GpuAnimator } from './gpu-animator.js';
+export type { PracticeGpuParams } from './gpu-animator.js';
+export { GpuSkillCache, skeletonGpuBindingKey } from './gpu-skill-cache.js';
+export type { CachedSkillGpuData } from './gpu-skill-cache.js';
+export { GpuWorldTransform, worldTransformIdentity } from './gpu-world-transform.js';
+export type { WorldTransformParams } from './gpu-world-transform.js';
 export { GpuUniformPool, GpuVertexBufferPool } from './gpu-buffer-pool.js';
 export {
     Renderer,
@@ -87,11 +97,12 @@ export {
 
 export { parseBMP, loadTexture } from './texture.js';
 export type { TextureHandle } from './texture.js';
-export { Practice, RepeatMode } from './animation.js';
+export { Practice, RepeatMode, applyPractices } from './animation.js';
+export type { RepeatModeType, PracticeOptions, SkeletonEventHandler } from './animation.js';
 
 export { createDiamondMesh } from './procedural/diamond.js';
 export type { ProceduralMeshFactory } from './procedural/index.js';
-export { transformMesh } from './display-list.js';
+export { transformMesh, transformMeshUpright } from './display-list.js';
 export { loadGltfMeshes } from './loaders/gltf.js';
 export type {
     DisplayListEntry,

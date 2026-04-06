@@ -78,8 +78,59 @@
 	let uiReady = $state(false);
 	let loadText = $state('Loading VitaMoo...');
 	let overlayDone = $state(false);
-	let helpOpen = $state(false);
-	let debugOpen = $state(false);
+	type SidebarTab = 'demo' | 'help' | 'debug';
+	let sidebarTab = $state<SidebarTab>('demo');
+	let sidebarWidth = $state(280);
+	let sidebarCollapsed = $state(false);
+	let bottomBarCollapsed = $state(false);
+	let sidebarResize = $state<{ startX: number; startW: number } | null>(null);
+
+	function toggleSidebarCollapsed() {
+		sidebarCollapsed = !sidebarCollapsed;
+	}
+
+	function toggleBottomBarCollapsed() {
+		bottomBarCollapsed = !bottomBarCollapsed;
+	}
+
+	function beginSidebarResize(e: MouseEvent) {
+		e.preventDefault();
+		if (sidebarCollapsed) {
+			sidebarCollapsed = false;
+		}
+		sidebarResize = { startX: e.clientX, startW: sidebarWidth };
+		window.addEventListener('mousemove', moveSidebarResize);
+		window.addEventListener('mouseup', endSidebarResize);
+	}
+
+	function moveSidebarResize(e: MouseEvent) {
+		const d = sidebarResize;
+		if (!d) return;
+		const next = d.startW + (e.clientX - d.startX);
+		sidebarWidth = Math.min(560, Math.max(200, next));
+	}
+
+	function endSidebarResize() {
+		sidebarResize = null;
+		window.removeEventListener('mousemove', moveSidebarResize);
+		window.removeEventListener('mouseup', endSidebarResize);
+	}
+
+	$effect(() => {
+		return () => {
+			window.removeEventListener('mousemove', moveSidebarResize);
+			window.removeEventListener('mouseup', endSidebarResize);
+		};
+	});
+
+	$effect(() => {
+		if (!uiReady) return;
+		void sidebarCollapsed;
+		void sidebarWidth;
+		void bottomBarCollapsed;
+		const id = requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+		return () => cancelAnimationFrame(id);
+	});
 
 	let scenesList = $state<{ name: string }[]>([]);
 	let charactersList = $state<CharacterDef[]>([]);
@@ -144,6 +195,31 @@
 		s.spin.zoom = zoom;
 		s.speedScale = speed / 100;
 		s.render();
+	}
+
+	/** Range inputs use `value={…}` + oninput so wheel/drag orbit sync updates the thumb (Svelte bind:value can miss external updates). */
+	function onRotYRangeInput(e: Event) {
+		const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
+		rotY = v;
+		if (stageRef) pushSpinToStage(stageRef);
+	}
+
+	function onRotXRangeInput(e: Event) {
+		const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
+		rotX = v;
+		if (stageRef) pushSpinToStage(stageRef);
+	}
+
+	function onZoomRangeInput(e: Event) {
+		const z = (e.currentTarget as HTMLInputElement).valueAsNumber;
+		zoom = z;
+		if (stageRef) {
+			stageRef.spin.zoom = z;
+			distFarActive = false;
+			distMedActive = false;
+			distNearActive = false;
+			stageRef.render();
+		}
 	}
 
 	function rebuildActorOptions(s: MooShowStage) {
@@ -323,16 +399,6 @@
 		syncPauseUi(s);
 	}
 
-	function toggleHelp() {
-		if (debugOpen) debugOpen = false;
-		helpOpen = !helpOpen;
-	}
-
-	function toggleDebug() {
-		if (helpOpen) helpOpen = false;
-		debugOpen = !debugOpen;
-	}
-
 	function handleKeyAction(s: MooShowStage, action: KeyAction, value?: number) {
 		switch (action) {
 			case 'stepSceneNext':
@@ -365,12 +431,6 @@
 			case 'setSpeed':
 				if (value !== undefined) speed = value;
 				syncPauseUi(s);
-				break;
-			case 'toggleHelp':
-				toggleHelp();
-				break;
-			case 'toggleDebug':
-				toggleDebug();
 				break;
 			default:
 				break;
@@ -410,6 +470,12 @@
 					canvas: el,
 					assetsBaseUrl,
 					hooks: {
+						onOrbitViewChange: (s) => {
+							if (cancelled) return;
+							rotY = Math.round(s.rotY);
+							rotX = Math.round(s.rotX);
+							zoom = Math.round(s.zoom);
+						},
 						onKeyAction: (action, v) => {
 							if (stage) handleKeyAction(stage, action, v);
 						},
@@ -499,13 +565,75 @@
 		<div class="banner error" role="alert">{errorMsg}</div>
 	{/if}
 
-	<header>
-		<h1>VitaMoo</h1>
-		<span class="subtitle">Spin the Sims!</span>
-	</header>
-
 	<div class="layout">
-		<div class="sidebar">
+		{#if sidebarCollapsed}
+		<button
+			type="button"
+			class="sidebar-disclosure sidebar-disclosure-pinned"
+			onclick={toggleSidebarCollapsed}
+			aria-expanded={false}
+			title="Show panel"
+			aria-label="Show panel"
+		>›</button
+		>
+		<button
+			type="button"
+			class="sidebar-resize sidebar-resize-pinned-collapsed"
+			aria-label="Resize panel width"
+			title="Resize panel width"
+			onmousedown={beginSidebarResize}
+		></button>
+		{/if}
+		{#if !sidebarCollapsed}
+		<div class="sidebar-shell" style:width="{sidebarWidth}px">
+			<div class="sidebar-panel-head">
+				<button
+					type="button"
+					class="sidebar-disclosure"
+					onclick={toggleSidebarCollapsed}
+					aria-expanded={true}
+					aria-controls="sidebar-panel-scroll"
+					title="Hide panel"
+					aria-label="Hide panel"
+				>‹</button
+				>
+				<div class="sidebar-panel-title">
+					<span class="sidebar-title-brand">VitaMoo</span>
+					<span class="sidebar-title-sep">:</span>
+					<span class="sidebar-title-tagline">Spin the Sims!</span>
+				</div>
+			</div>
+			<div class="sidebar-toolbar">
+					<div class="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
+						<button
+							type="button"
+							class="sidebar-tab"
+							role="tab"
+							aria-selected={sidebarTab === 'demo'}
+							onclick={() => (sidebarTab = 'demo')}
+						>Demo</button
+						>
+						<button
+							type="button"
+							class="sidebar-tab"
+							role="tab"
+							aria-selected={sidebarTab === 'help'}
+							onclick={() => (sidebarTab = 'help')}
+						>Help</button
+						>
+						<button
+							type="button"
+							class="sidebar-tab"
+							role="tab"
+							aria-selected={sidebarTab === 'debug'}
+							onclick={() => (sidebarTab = 'debug')}
+						>Debug</button
+						>
+					</div>
+			</div>
+			<div class="sidebar-scroll" id="sidebar-panel-scroll">
+				{#if sidebarTab === 'demo'}
+				<div class="sidebar-tab-panel">
 				<div class="group">
 					<h3>Scene</h3>
 					<select
@@ -523,12 +651,16 @@
 							type="button"
 							class="nav-btn"
 							id="btnScenePrev"
+							title="Previous scene"
+							aria-label="Previous scene"
 							onclick={() => stageRef && stepScene(stageRef, -1)}>&larr; Prev</button
 						>
 						<button
 							type="button"
 							class="nav-btn"
 							id="btnSceneNext"
+							title="Next scene"
+							aria-label="Next scene"
 							onclick={() => stageRef && stepScene(stageRef, 1)}>Next &rarr;</button
 						>
 					</div>
@@ -552,6 +684,7 @@
 							class="nav-btn"
 							id="btnActorPrev"
 							title="Previous actor"
+							aria-label="Previous actor"
 							onclick={() => stageRef && stepActor(stageRef, -1)}>&larr; Prev</button
 						>
 						<button
@@ -559,6 +692,7 @@
 							class="nav-btn"
 							id="btnActorNext"
 							title="Next actor"
+							aria-label="Next actor"
 							onclick={() => stageRef && stepActor(stageRef, 1)}>Next &rarr;</button
 						>
 					</div>
@@ -583,6 +717,7 @@
 							class="nav-btn"
 							id="btnCharacterPrev"
 							title="Previous character"
+							aria-label="Previous character"
 							onclick={() => stageRef && stepCharacter(stageRef, -1)}>&larr; Prev</button
 						>
 						<button
@@ -590,6 +725,7 @@
 							class="nav-btn"
 							id="btnCharacterNext"
 							title="Next character"
+							aria-label="Next character"
 							onclick={() => stageRef && stepCharacter(stageRef, 1)}>Next &rarr;</button
 						>
 					</div>
@@ -613,153 +749,185 @@
 							type="button"
 							class="nav-btn"
 							id="btnAnimPrev"
-							title="Previous (Left arrow)"
+							title="Previous animation"
+							aria-label="Previous animation"
 							onclick={() => stageRef && stepAnimation(stageRef, -1)}>&larr; Prev</button
 						>
 						<button
 							type="button"
 							class="nav-btn"
 							id="btnAnimNext"
-							title="Next (Right arrow)"
+							title="Next animation"
+							aria-label="Next animation"
 							onclick={() => stageRef && stepAnimation(stageRef, 1)}>Next &rarr;</button
 						>
 					</div>
 				</div>
+				</div>
+				{:else if sidebarTab === 'help'}
+				<div class="help-tab sidebar-tab-panel" role="tabpanel">
+					<h2 class="help-tab-title">Spin the Sims!</h2>
+					<p class="help-intro">Click and drag to spin. Click a Sim to select them.</p>
+					<table class="help-keys">
+						<tbody>
+							<tr><th colspan="2">Navigate</th></tr>
+							<tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous scene</td></tr>
+							<tr><td><kbd>D</kbd> <kbd>A</kbd></td><td>next / previous actor</td></tr>
+							<tr><td><kbd>S</kbd> <kbd>W</kbd></td><td>next / previous character</td></tr>
+							<tr><td><kbd>E</kbd> <kbd>Q</kbd></td><td>next / previous animation</td></tr>
+							<tr><td><kbd>Space</kbd></td><td>next actor (<kbd>Shift</kbd> = previous)</td></tr>
+							<tr><th colspan="2">Spin and zoom</th></tr>
+							<tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Spin (hold = faster)</td></tr>
+							<tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Zoom in / out</td></tr>
+							<tr><td>Drag</td><td>Spin actor + zoom</td></tr>
+							<tr><td>Right drag</td><td>Orbit stage</td></tr>
+							<tr><td>Click</td><td>Select actor (background = All)</td></tr>
+							<tr><td>Scroll</td><td>Zoom</td></tr>
+							<tr><th colspan="2">Speed</th></tr>
+							<tr><td><kbd>1</kbd><kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd>–<kbd>9</kbd></td><td>Slow · normal · fast</td></tr>
+							<tr><td><kbd>0</kbd></td><td>Pause</td></tr>
+							<tr><th colspan="2">Panels</th></tr>
+							<tr><td>‹ / ›</td><td>Show or hide the side panel</td></tr>
+							<tr><td>Strip</td><td>Drag beside › to open the panel and set its width</td></tr>
+							<tr><td>Bottom chevron</td><td>Show or hide the camera bar</td></tr>
+						</tbody>
+					</table>
+					<p class="help-tip">
+						<strong>All</strong> selected means you control every actor at once.
+					</p>
+				</div>
+				{:else}
+				<div class="sidebar-tab-panel debug-tab-panel" role="tabpanel">
+					<DebugPanel stage={stageRef} active={sidebarTab === 'debug' && !sidebarCollapsed} />
+				</div>
+				{/if}
 			</div>
+		</div>
+		<button
+			type="button"
+			class="sidebar-resize"
+			aria-label="Resize panel width"
+			title="Resize panel width"
+			onmousedown={beginSidebarResize}
+		></button>
+		{/if}
 
 			<div class="viewer">
-				<canvas
-					bind:this={canvasEl}
-					id="viewport"
-					aria-label="Character viewport"
-				></canvas>
-				<div class="controls">
-					<button
-						type="button"
-						class="dist-btn"
-						class:active={distFarActive}
-						data-dist="far"
-						onclick={() => stageRef && setDistance(stageRef, 'far')}>Far</button
-					>
-					<button
-						type="button"
-						class="dist-btn"
-						class:active={distMedActive}
-						data-dist="medium"
-						onclick={() => stageRef && setDistance(stageRef, 'medium')}>Med</button
-					>
-					<button
-						type="button"
-						class="dist-btn"
-						class:active={distNearActive}
-						data-dist="near"
-						onclick={() => stageRef && setDistance(stageRef, 'near')}>Near</button
-					>
-					<label
-						>Rotate <input
-							type="range"
-							id="rotY"
-							min="0"
-							max="360"
-							bind:value={rotY}
-							oninput={() => stageRef && pushSpinToStage(stageRef)}
-						/></label
-					>
-					<label
-						>Tilt <input
-							type="range"
-							id="rotX"
-							min="-89"
-							max="89"
-							bind:value={rotX}
-							oninput={() => stageRef && pushSpinToStage(stageRef)}
-						/></label
-					>
-					<label
-						>Zoom <input
-							type="range"
-							id="zoom"
-							min="15"
-							max="400"
-							bind:value={zoom}
-							oninput={() => {
-								if (stageRef) {
-									stageRef.spin.zoom = zoom;
-									distFarActive = false;
-									distMedActive = false;
-									distNearActive = false;
-									stageRef.render();
-								}
-							}}
-						/></label
-					>
-					<label
-						>Speed <input
-							type="range"
-							id="speed"
-							min="0"
-							max="1000"
-							bind:value={speed}
-							oninput={() => stageRef && pushSpinToStage(stageRef)}
-						/></label
-					>
-					<button
-						type="button"
-						class="filter-btn"
-						id="btnPause"
-						class:active={pauseActive}
-						title="Pause/Resume (0)"
-						style="min-width:50px"
-						onclick={togglePause}>{pauseLabel}</button
-					>
+				<div class="viewer-stage">
+					<canvas
+						bind:this={canvasEl}
+						id="viewport"
+						aria-label="Character viewport"
+					></canvas>
 				</div>
+				{#if !bottomBarCollapsed}
+				<div class="viewer-footer-toolbar">
+					<div class="controls" id="viewer-bottom-controls">
+						<button
+							type="button"
+							class="dist-btn"
+							class:active={distFarActive}
+							data-dist="far"
+							title="Far camera"
+							aria-label="Far camera"
+							onclick={() => stageRef && setDistance(stageRef, 'far')}>Far</button
+						>
+						<button
+							type="button"
+							class="dist-btn"
+							class:active={distMedActive}
+							data-dist="medium"
+							title="Medium camera"
+							aria-label="Medium camera"
+							onclick={() => stageRef && setDistance(stageRef, 'medium')}>Med</button
+						>
+						<button
+							type="button"
+							class="dist-btn"
+							class:active={distNearActive}
+							data-dist="near"
+							title="Near camera"
+							aria-label="Near camera"
+							onclick={() => stageRef && setDistance(stageRef, 'near')}>Near</button
+						>
+						<label
+							title="Rotate view"
+							>Rotate <input
+								type="range"
+								id="rotY"
+								min="0"
+								max="360"
+								value={rotY}
+								aria-label="Rotate view"
+								oninput={onRotYRangeInput}
+							/></label
+						>
+						<label
+							title="Tilt view"
+							>Tilt <input
+								type="range"
+								id="rotX"
+								min="-89"
+								max="89"
+								value={rotX}
+								aria-label="Tilt view"
+								oninput={onRotXRangeInput}
+							/></label
+						>
+						<label
+							title="Zoom view"
+							>Zoom <input
+								type="range"
+								id="zoom"
+								min="15"
+								max="400"
+								value={zoom}
+								aria-label="Zoom view"
+								oninput={onZoomRangeInput}
+							/></label
+						>
+						<label
+							title="Playback speed"
+							>Speed <input
+								type="range"
+								id="speed"
+								min="0"
+								max="1000"
+								bind:value={speed}
+								aria-label="Playback speed"
+								oninput={() => stageRef && pushSpinToStage(stageRef)}
+							/></label
+						>
+						<button
+							type="button"
+							class="filter-btn"
+							id="btnPause"
+							class:active={pauseActive}
+							title="Pause or resume"
+							aria-label="Pause or resume"
+							style="min-width:50px"
+							onclick={togglePause}>{pauseLabel}</button
+						>
+					</div>
+				</div>
+				{/if}
 				<button
 					type="button"
-					id="btnHelp"
-					title="Help (H) / Shift+click for Debug (Ctrl+Shift+C)"
-					onclick={(e) => { if (e.shiftKey) toggleDebug(); else toggleHelp(); }}>Help?!?</button
+					class="bottom-disclosure bottom-disclosure-anchor"
+					onclick={toggleBottomBarCollapsed}
+					aria-expanded={!bottomBarCollapsed}
+					aria-controls={bottomBarCollapsed ? undefined : 'viewer-bottom-controls'}
+					title={bottomBarCollapsed ? 'Show camera bar' : 'Hide camera bar'}
+					aria-label={bottomBarCollapsed ? 'Show camera bar' : 'Hide camera bar'}
+				><span
+						class="disclosure-chevron"
+						class:disclosure-chevron-down={!bottomBarCollapsed}
+						class:disclosure-chevron-up={bottomBarCollapsed}
+						aria-hidden="true"
+					>‹</span></button
 				>
 			</div>
 		</div>
-
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div id="helpDialog" hidden={!helpOpen} onclick={toggleHelp}>
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-		<div class="help-content" onclick={(e) => e.stopPropagation()}>
-			<h2>Spin the Sims! 🎮</h2>
-			<p class="help-intro">Click and drag to spin! Click a Sim to select them. 💚</p>
-			<table class="help-keys">
-				<tbody>
-					<tr><th colspan="2">🎬 Navigate</th></tr>
-					<tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>next / previous scene</td></tr>
-					<tr><td><kbd>D</kbd> <kbd>A</kbd></td><td>next / previous actor</td></tr>
-					<tr><td><kbd>S</kbd> <kbd>W</kbd></td><td>next / previous character</td></tr>
-					<tr><td><kbd>E</kbd> <kbd>Q</kbd></td><td>next / previous animation</td></tr>
-					<tr><td><kbd>Space</kbd></td><td>next actor (<kbd>Shift</kbd>=prev)</td></tr>
-					<tr><th colspan="2">🎡 Spin &amp; Zoom</th></tr>
-					<tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Spin (hold = faster! 🌀)</td></tr>
-					<tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Zoom in / out</td></tr>
-					<tr><td>Drag 🖱️</td><td>Spin actor + Zoom</td></tr>
-					<tr><td>Right Drag 🖱️</td><td>Orbit stage 🎪</td></tr>
-					<tr><td>Click 🖱️</td><td>Select actor (bg = All)</td></tr>
-					<tr><td>Scroll 🖱️</td><td>Zoom</td></tr>
-					<tr><th colspan="2">⏱️ Speed</th></tr>
-					<tr><td><kbd>1</kbd><kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd>–<kbd>9</kbd></td><td>Slow · Normal · Fast 🚀</td></tr>
-					<tr><td><kbd>0</kbd></td><td>Pause ⏸️</td></tr>
-					<tr><td><kbd>H</kbd></td><td>This help</td></tr>
-				</tbody>
-			</table>
-			<p class="help-tip">
-				💡 <strong>All</strong> selected = control everyone at once!<br />
-				🤫 Hold <kbd>←</kbd>/<kbd>→</kbd> then mash <kbd>Space</kbd>...
-			</p>
-		</div>
-	</div>
-
-	<DebugPanel stage={stageRef} open={debugOpen} onClose={toggleDebug} />
 
 	{#if !uiReady && !errorMsg}
 		<div id="loadingOverlay" class:done={overlayDone}>
@@ -786,11 +954,4 @@
 		color: #fff;
 	}
 
-	#helpDialog {
-		cursor: pointer;
-	}
-
-	#helpDialog .help-content {
-		cursor: default;
-	}
 </style>

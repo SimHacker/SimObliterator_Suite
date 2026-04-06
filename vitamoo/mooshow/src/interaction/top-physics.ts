@@ -96,3 +96,100 @@ export function applyTopTransform(
 
     return { x: x1 + t.driftX, y: y2 + pivotY, z: z2 + t.driftZ };
 }
+
+export function applyTopRotation(
+    v: { x: number; y: number; z: number },
+    t: TopPhysicsState,
+): { x: number; y: number; z: number } {
+    if (!t.active || !v) return v;
+
+    const nutX = t.nutationAmp * Math.sin(t.nutationPhase);
+    const nutZ = t.nutationAmp * Math.cos(t.nutationPhase * 0.7);
+    const tiltX = t.tilt * Math.sin(t.precessionAngle) + nutX;
+    const tiltZ = t.tilt * Math.cos(t.precessionAngle) + nutZ;
+
+    const cosZ = Math.cos(tiltZ);
+    const sinZ = Math.sin(tiltZ);
+    const y1 = v.y * cosZ - v.x * sinZ;
+    const x1 = v.y * sinZ + v.x * cosZ;
+
+    const cosX = Math.cos(tiltX);
+    const sinX = Math.sin(tiltX);
+    const y2 = y1 * cosX - v.z * sinX;
+    const z2 = y1 * sinX + v.z * cosX;
+
+    return { x: x1, y: y2, z: z2 };
+}
+
+export interface PreRotationParams {
+    active: boolean;
+    pivotY: number;
+    transX: number;
+    transZ: number;
+    rotation: readonly [number, number, number, number, number, number, number, number, number];
+}
+
+const IDENTITY_ROT: PreRotationParams['rotation'] = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+export function topPhysicsToPreRotation(
+    t: TopPhysicsState,
+    pivotY: number,
+): PreRotationParams {
+    if (!t.active) {
+        return { active: false, pivotY: 0, transX: 0, transZ: 0, rotation: IDENTITY_ROT };
+    }
+    const nutX = t.nutationAmp * Math.sin(t.nutationPhase);
+    const nutZ = t.nutationAmp * Math.cos(t.nutationPhase * 0.7);
+    const angleX = t.tilt * Math.sin(t.precessionAngle) + nutX;
+    const angleZ = t.tilt * Math.cos(t.precessionAngle) + nutZ;
+
+    const cosZ = Math.cos(angleZ);
+    const sinZ = Math.sin(angleZ);
+    const cosX = Math.cos(angleX);
+    const sinX = Math.sin(angleX);
+
+    // Combined rotation: first rotate around Z by tiltZ, then around X by tiltX.
+    // R = Rx(tiltX) * Rz(tiltZ), applied to column vector (x, relY, z).
+    // Row-major 3x3:
+    //   [ sinZ,       cosZ,       0     ]
+    //   [ cosX*sinZ, -cosX*cosZ,  sinX  ]   (note: axes are permuted because
+    //   [-sinX*sinZ,  sinX*cosZ,  cosX  ]    the tilt operates on (relY, x) then (y1, z))
+    // This matches the scalar math in applyTopTransform:
+    //   x1 = relY*sinZ + x*cosZ  (wait — that's not standard Rz)
+    // Actually the scalar code does:
+    //   y1 = relY*cosZ - x*sinZ; x1 = relY*sinZ + x*cosZ  (rotation in the relY-x plane)
+    //   y2 = y1*cosX - z*sinX;   z2 = y1*sinX + z*cosX    (rotation in the y1-z plane)
+    // Matrix form for (x, relY, z) -> (x1, y2, z2):
+    //   x1 = cosZ * x  + sinZ * relY + 0 * z
+    //   y2 = -sinZ*cosX * x + cosZ*cosX * relY + -sinX * z
+    //   z2 = sinZ*sinX * x  + -cosZ*sinX * relY + cosX * z
+    //   wait that's wrong too, let me just derive it directly.
+    //
+    // From the scalar code:
+    //   y1 = relY * cosZ - x * sinZ
+    //   x1 = relY * sinZ + x * cosZ
+    //   y2 = y1 * cosX - z * sinX
+    //   z2 = y1 * sinX + z * cosX
+    //
+    // Substituting y1:
+    //   x1 = cosZ * x + sinZ * relY
+    //   y2 = cosX * (cosZ * relY - sinZ * x) - sinX * z
+    //      = -sinZ*cosX * x + cosZ*cosX * relY - sinX * z
+    //   z2 = sinX * (cosZ * relY - sinZ * x) + cosX * z
+    //      = -sinZ*sinX * x + cosZ*sinX * relY + cosX * z
+    //
+    // So the 3x3 matrix for (x, relY, z) -> (x1, y2, z2):
+    const r: PreRotationParams['rotation'] = [
+        cosZ,           sinZ,            0,
+        -sinZ * cosX,   cosZ * cosX,    -sinX,
+        -sinZ * sinX,   cosZ * sinX,     cosX,
+    ];
+
+    return {
+        active: true,
+        pivotY,
+        transX: t.driftX,
+        transZ: t.driftZ,
+        rotation: r,
+    };
+}

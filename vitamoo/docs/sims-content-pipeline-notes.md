@@ -209,7 +209,7 @@ VitaBoy also includes a `QuaternionNoise` generator based on Perlin noise, inten
 
 ## Coordinate systems, quaternion tricks, and glTF import gotchas
 
-Notes from the original CMX Exporter C++ source (`SimsKit/maxscript/CMXExporter.cpp`) that matter for anyone building tools (Blender addons, WebGPU shaders, glTF importers) that touch VitaMoo/VitaBoy data.
+Notes about the Sims character animation pipeline that matter for anyone building tools (Blender addons, WebGPU shaders, glTF importers) that touch VitaMoo/VitaBoy data.
 
 ### Coordinate system: already converted at export time
 
@@ -288,14 +288,3 @@ trans = localParts.t * scale;
 ```
 
 The exporter strips all scale from the bone hierarchy. The Sims has no runtime bone scaling — it was baked out during export by multiplying translations by the parent's scale. This is why `updateTransforms` only does translation + rotation (no scale). If you import glTF skeletons that have non-uniform scale on bones, you need to bake the scale into the mesh before uploading, or the deformation will be wrong.
-
-### Source files (original C++ reference)
-
-| File | Contents |
-|------|----------|
-| `SimsKit/maxscript/CMXExporter.cpp` | The exporter: `ExtractTransRot`, `TMToQuat`, `FixName`, `CollectSkeleton`, `CollectMotion`, `ExportSkinMesh`, note-track parsing, Physique vertex binding readout. |
-| `SimsKit/maxscript/CMXExporter.h` | `CMXExporter` and `MySceneEntry` class declarations. |
-| `SimsKit/maxscript/maxis-maxscript.ms` | MaxScript UI: database integration, batch export, SourceSafe, filter/export controls. |
-| `SimsKit/U3D/U3DQuaternion.h/.cpp` | Quaternion class: Hamilton multiply (XYZW order), Slerp, `ConvertToMatrix`, `SetFromEuler`. By Eric Bowman, Maxis 1996. |
-| `SimsKit/U3D/U3DTransform.h/.cpp` | Transform class: mat4, rotation/translation factories. |
-| `SimsKit/vitaboy/skeleton.cpp` | Runtime: `Skeleton`, `Bone`, `Skill`, `Practice`, `Suit`, `Dressing`, `DeformableMesh`, `SAnimator`. The deformation and animation playback code that VitaMoo reimplements. |

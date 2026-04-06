@@ -10,14 +10,18 @@ import {
     mergePipelineValidationSettings,
     effectivePipelineBackend,
     gpuStageFallbackWarnings,
-    compareInspectionTaps,
     defaultGpuCharacterPipelineCaps,
     packBoneTransforms,
     createBoneTransformBuffer,
-    packDeformedMesh,
-    createDeformedMeshBuffer,
+    compareBoneTransforms,
+    compareDeformedVertices,
     DEFORMED_VERTEX_FLOATS,
     BONE_TRANSFORM_FLOATS,
+    RepeatMode,
+    Practice,
+    applyPractices,
+    skeletonGpuBindingKey,
+    findBone,
 } from 'vitamoo';
 import type {
     CharacterPipelineStages,
@@ -25,8 +29,12 @@ import type {
     GpuCharacterPipelineCaps,
     GpuInstrumentationCallbacks,
     PipelineBuffer,
-    InspectionTap,
+    CachedSkillGpuData,
+    WorldTransformParams,
+    PracticeGpuParams,
+    GpuMeshBoneBindContext,
 } from 'vitamoo';
+import { MOO_SHOW_VERTICAL_FOV_DEG } from '../camera-defaults.js';
 
 type ResolvedRenderer = Awaited<ReturnType<typeof Renderer.create>> | null;
 type RendererWithDebug = NonNullable<ResolvedRenderer> & { setDebugSlice(mode: number): void };
@@ -48,11 +56,48 @@ import { ContentLoader } from './content-loader.js';
 import type { ContentIndex, CharacterDef, SceneDef } from './content-loader.js';
 import type { Body, Vec3 } from './types.js';
 import { SpinController } from '../interaction/spin-controller.js';
-import { tickTopPhysics, applyTopTransform, TOP_MAX_TILT } from '../interaction/top-physics.js';
+import { tickTopPhysics, applyTopTransform, applyTopRotation, topPhysicsToPreRotation, TOP_MAX_TILT } from '../interaction/top-physics.js';
 import { SoundEngine } from '../audio/sound-engine.js';
 
 let _stagePickLogCount = 0;
 const DEBUG_STAGE_PICK_LOGS = 5;
+
+export interface ValidationAnimRecord {
+    bodyIndex: number;
+    boneCount: number;
+    posMaxErr: number;
+    rotMaxErr: number;
+    posExceedCount: number;
+    rotExceedCount: number;
+    ok: boolean;
+}
+
+export interface ValidationDeformRecord {
+    bodyIndex: number;
+    meshIndex: number;
+    meshName: string;
+    vertexCount: number;
+    posMaxErr: number;
+    normMaxErr: number;
+    posExceedCount: number;
+    normExceedCount: number;
+    ok: boolean;
+}
+
+export interface ValidationSnapshot {
+    frame: number;
+    animation: ValidationAnimRecord[];
+    deformation: ValidationDeformRecord[];
+}
+
+export interface StageGpuLimits {
+    maxBufferSize: number;
+    maxStorageBufferBindingSize: number;
+    maxUniformBufferBindingSize: number;
+    maxComputeInvocationsPerWorkgroup: number;
+    maxComputeWorkgroupSizeX: number;
+    maxComputeWorkgroupsPerDimension: number;
+}
 
 export interface StageConfig {
     canvas: HTMLCanvasElement;
@@ -134,10 +179,14 @@ export class MooShowStage {
     private _characterPipeline: CharacterPipelineStages;
     private _pipelineValidation: PipelineValidationSettings;
     private _gpuCapsCache: GpuCharacterPipelineCaps;
+    private _gpuLimitsCache: StageGpuLimits | null = null;
     private readonly _pipelineFallbackKeys = new Set<string>();
     private _validationFrameCounter = 0;
-    private _validateDeformThisFrame = false;
     private _boneTransformBuffers = new Map<number, PipelineBuffer>();
+    private _localPosesBuffers = new Map<number, GPUBuffer>();
+    private _prioritiesBuffers = new Map<number, GPUBuffer>();
+    private _lastValidation: { anim: string | null; deform: string | null; frame: number } = { anim: null, deform: null, frame: 0 };
+    private _lastValidationStructured: ValidationSnapshot = { frame: 0, animation: [], deformation: [] };
 
     constructor(config: StageConfig) {
         this.canvas = config.canvas;
@@ -150,14 +199,18 @@ export class MooShowStage {
         const urlDeformGpu =
             typeof window !== 'undefined' &&
             new URLSearchParams(window.location.search).get('vitamooDeformGpu') === '1';
+        const urlAnimGpu =
+            typeof window !== 'undefined' &&
+            new URLSearchParams(window.location.search).get('vitamooAnimGpu') === '1';
         this._verbose = config.verbose ?? urlVerbose;
         this._characterPipeline = mergeCharacterPipelineStages({
             ...config.characterPipeline,
             ...(urlDeformGpu ? { deformation: 'gpu' as const } : {}),
+            ...(urlAnimGpu ? { animation: 'gpu' as const } : {}),
         });
         this._pipelineValidation = mergePipelineValidationSettings({
             ...config.pipelineValidation,
-            ...(urlPipelineVal ? { enabled: true, compareDeformation: true } : {}),
+            ...(urlPipelineVal ? { enabled: true, compareDeformation: true, compareAnimation: true } : {}),
         });
         this._gpuCapsCache = defaultGpuCharacterPipelineCaps();
         this.hooks = { ...defaultHooks, ...config.hooks };
@@ -259,6 +312,56 @@ export class MooShowStage {
         return { ...this._pipelineValidation };
     }
 
+    /** Live pipeline status for debug panel display. */
+    getPipelineStatus(): {
+        effectiveAnimation: string;
+        effectiveDeformation: string;
+        gpuCaps: { animation: boolean; deformation: boolean };
+        /** WebGPU `Renderer.create()` promise not settled yet. */
+        webgpuPending: boolean;
+        /** Init finished without a renderer (unsupported GPU, limits, or error). */
+        webgpuFailed: boolean;
+        gpuLimits: StageGpuLimits | null;
+        validationFrame: number;
+        validationCadence: number;
+        bodyCount: number;
+        skillName: string | null;
+        elapsed: number;
+        animFrame: number;
+        animFrames: number;
+        lastValidation: { anim: string | null; deform: string | null; frame: number };
+        lastValidationStructured: ValidationSnapshot;
+    } {
+        const practice = this._bodies[0]?.practices?.[0] as any;
+        const skill = practice?.skill;
+        const frames = skill?.motions?.[0]?.frames ?? 0;
+        const elapsed = practice?.elapsed ?? 0;
+        const r = this._renderer;
+        const webgpuPending = r instanceof Promise;
+        const webgpuFailed = r === null;
+        return {
+            effectiveAnimation: effectivePipelineBackend(this._characterPipeline.animation, this._gpuCapsCache.animation),
+            effectiveDeformation: effectivePipelineBackend(this._characterPipeline.deformation, this._gpuCapsCache.deformation),
+            gpuCaps: { animation: this._gpuCapsCache.animation, deformation: this._gpuCapsCache.deformation },
+            webgpuPending,
+            webgpuFailed,
+            gpuLimits: this._gpuLimitsCache ? { ...this._gpuLimitsCache } : null,
+            validationFrame: this._validationFrameCounter,
+            validationCadence: this._pipelineValidation.everyNFrames,
+            bodyCount: this._bodies.length,
+            skillName: skill?.name ?? null,
+            elapsed,
+            animFrame: Math.floor(elapsed * frames),
+            animFrames: frames,
+            lastValidation: { ...this._lastValidation },
+            lastValidationStructured: {
+                frame: this._lastValidationStructured.frame,
+                animation: [...this._lastValidationStructured.animation],
+                deformation: [...this._lastValidationStructured.deformation],
+            },
+        };
+    }
+
     /** Set plumb-bob scale at runtime (default 1). */
     async setPlumbBobScale(scale: number): Promise<void> {
         this._plumbBobScale = scale;
@@ -303,6 +406,7 @@ export class MooShowStage {
         if (!scenes?.[sceneIndex]) return;
 
         const newBodies = await this.loader.loadScene(sceneIndex);
+        this._destroyBodyGpuScratch();
         this._clearHover();
         this._bodies = newBodies;
         this._activeScene = scenes[sceneIndex].name;
@@ -325,6 +429,7 @@ export class MooShowStage {
         if (!chars?.[charIndex]) return;
         this._activeScene = null;
         const body = await this.loader.loadCharacterBody(chars[charIndex]);
+        this._destroyBodyGpuScratch();
         this._clearHover();
         this._bodies = body ? [body] : [];
         this._selectedActor = this._bodies.length === 1 ? 0 : -1;
@@ -393,12 +498,51 @@ export class MooShowStage {
             const body = this._bodies[i];
             if (!body?.skeleton) continue;
             const practice = await this.loader._loadAnimation(animName, body.skeleton);
-            body.practice = practice;
-            if ((practice as any)?.ready && body.skeleton) {
+            if (practice) body.practices = [practice];
+            if (body.practices.length > 0 && body.skeleton) {
                 this._applyAnimationTick(body, this._animTime > 0 ? this._animTime : 1);
             }
         }
         this._renderFrame();
+    }
+
+    /**
+     * Add a practice to a body (multi-practice layering).
+     * Higher priority practices are applied on top of lower ones.
+     * Set opaque=true to occlude lower-priority practices on the same bones.
+     */
+    async addPractice(
+        animName: string,
+        actorIndex: number,
+        options?: { priority?: number; weight?: number; opaque?: boolean; scale?: number },
+    ): Promise<any> {
+        const body = this._bodies[actorIndex];
+        if (!body?.skeleton) return null;
+        const practice = await this.loader._loadAnimation(animName, body.skeleton);
+        if (!practice) return null;
+        if (options) {
+            if (options.priority !== undefined) practice.priority = options.priority;
+            if (options.weight !== undefined) practice.weight = options.weight;
+            if (options.opaque !== undefined) practice.opaque = options.opaque;
+            if (options.scale !== undefined) practice.scale = options.scale;
+        }
+        body.practices.push(practice);
+        this._renderFrame();
+        return practice;
+    }
+
+    /** Remove a specific practice from a body. */
+    removePractice(actorIndex: number, practice: Practice): void {
+        const body = this._bodies[actorIndex];
+        if (!body) return;
+        const idx = body.practices.indexOf(practice);
+        if (idx >= 0) body.practices.splice(idx, 1);
+    }
+
+    /** Remove all practices from a body. */
+    clearPractices(actorIndex: number): void {
+        const body = this._bodies[actorIndex];
+        if (body) body.practices = [];
     }
 
     async pick(screenX: number, screenY: number): Promise<number> {
@@ -424,6 +568,18 @@ export class MooShowStage {
         if (!this._paused) this._lastFrameTime = 0;
     }
 
+    /** Advance one animation tick while paused (single-frame step). */
+    stepFrame(ms = 33): void {
+        this._paused = true;
+        this._animTime += ms * this._speedScale;
+        for (const body of this._bodies) {
+            if (body.practices.length > 0 && body.skeleton) {
+                this._applyAnimationTick(body, this._animTime);
+            }
+        }
+        this._renderFrame();
+    }
+
     start(): void {
         if (this._running) return;
         this._running = true;
@@ -443,6 +599,7 @@ export class MooShowStage {
 
     destroy(): void {
         this.stop();
+        this._destroyBodyGpuScratch();
     }
 
     private _loop = (timestamp: number): void => {
@@ -456,7 +613,7 @@ export class MooShowStage {
             this._animTime += dt * this._speedScale;
 
             for (const body of this._bodies) {
-                if ((body.practice as any)?.ready && body.skeleton) {
+                if (body.practices.length > 0 && body.skeleton) {
                     this._applyAnimationTick(body, this._animTime);
                     needsRender = true;
                 }
@@ -504,6 +661,7 @@ export class MooShowStage {
         if (this._keysHeld.up || this._keysHeld.down) {
             const zoomDelta = this._keysHeld.down ? 1.5 : -1.5;
             this.spin.zoom = Math.max(15, Math.min(400, this.spin.zoom + zoomDelta));
+            this._emitOrbitViewSync();
             needsRender = true;
         }
         if (this._keysHeld.left || this._keysHeld.right) {
@@ -534,6 +692,14 @@ export class MooShowStage {
 
     private _effectiveDebugSlice(): number {
         return this._parseDebugSliceFromUrl() ?? 0;
+    }
+
+    private _emitOrbitViewSync(): void {
+        this.hooks.onOrbitViewChange?.({
+            rotY: this.spin.rotY,
+            rotX: this.spin.rotX,
+            zoom: this.spin.zoom,
+        });
     }
 
     private _clearHover(): void {
@@ -570,16 +736,19 @@ export class MooShowStage {
         console.warn('[MooShowStage pipeline]', message);
     }
 
+    private _destroyBodyGpuScratch(): void {
+        for (const buf of this._boneTransformBuffers.values()) buf.destroy();
+        this._boneTransformBuffers.clear();
+        for (const buf of this._localPosesBuffers.values()) buf.destroy();
+        this._localPosesBuffers.clear();
+        for (const buf of this._prioritiesBuffers.values()) buf.destroy();
+        this._prioritiesBuffers.clear();
+    }
+
     private _applyAnimationTick(body: Body, animTime: number): void {
-        if (!(body.practice as any)?.ready || !body.skeleton) return;
-        const eff = effectivePipelineBackend(
-            this._characterPipeline.animation,
-            this._gpuCapsCache.animation,
-        );
-        if (eff === 'cpu') {
-            (body.practice as any).tick(animTime);
-            updateTransforms(body.skeleton);
-        }
+        if (!body.skeleton || body.practices.length === 0) return;
+        applyPractices(body.practices, body.skeleton, animTime);
+        updateTransforms(body.skeleton);
     }
 
     private async _updateHoverAtClient(clientX: number, clientY: number): Promise<void> {
@@ -607,13 +776,14 @@ export class MooShowStage {
         if (!renderer) return;
 
         this._gpuCapsCache = renderer.getGpuCharacterPipelineCaps();
+        this._gpuLimitsCache = renderer.getGpuLimits();
         for (const w of gpuStageFallbackWarnings(this._characterPipeline, this._gpuCapsCache)) {
             this._logPipelineFallbackOnce(w, w);
         }
-        this._validateDeformThisFrame =
-            this._pipelineValidation.enabled &&
-            this._pipelineValidation.compareDeformation &&
+        const validateThisFrame = this._pipelineValidation.enabled &&
             (++this._validationFrameCounter % Math.max(1, this._pipelineValidation.everyNFrames)) === 0;
+        const tapAnim = validateThisFrame && this._pipelineValidation.compareAnimation;
+        const tapDeform = validateThisFrame && this._pipelineValidation.compareDeformation;
         const slice = this._effectiveDebugSlice();
         (renderer as RendererWithDebug).setDebugSlice(slice);
 
@@ -641,24 +811,60 @@ export class MooShowStage {
         const eyeY = this._cameraTarget.y + Math.sin(rotXRad) * zoom;
         const eyeZ = Math.cos(rotYRad) * cosX * zoom;
 
-        renderer.setCamera(50, this.canvas.width / this.canvas.height, 0.01, 100,
+        renderer.setCamera(MOO_SHOW_VERTICAL_FOV_DEG, this.canvas.width / this.canvas.height, 0.01, 100,
             eyeX, eyeY, eyeZ,
             this._cameraTarget.x, this._cameraTarget.y, this._cameraTarget.z);
 
-        for (let bi = 0; bi < this._bodies.length; bi++) {
-            this._applyActorHighlight(renderer, bi);
-            const body = this._bodies[bi];
-            const bTop = body.top;
-            const spinDeg = (body.direction || 0) + (body.spinOffset || 0);
-            const bodyDir = spinDeg * Math.PI / 180;
-            const cosD = Math.cos(bodyDir);
-            const sinD = Math.sin(bodyDir);
-            const deformBackend = effectivePipelineBackend(
-                this._characterPipeline.deformation,
-                this._gpuCapsCache.deformation,
-            );
-            let boneGpuBuffer: GPUBuffer | null = null;
-            if (body.skeleton && deformBackend === 'gpu') {
+        const deformBackend = effectivePipelineBackend(
+            this._characterPipeline.deformation,
+            this._gpuCapsCache.deformation,
+        );
+        const animBackend = effectivePipelineBackend(
+            this._characterPipeline.animation,
+            this._gpuCapsCache.animation,
+        );
+
+        type AnimWork = {
+            bi: number;
+            boneCount: number;
+            hierarchyBuffer: GPUBuffer;
+            depthOrderBuffer: GPUBuffer;
+            depthOffsetsBuffer: GPUBuffer;
+            depthLayerCount: number;
+            localPosesBuffer: GPUBuffer;
+            prioritiesBuffer: GPUBuffer;
+            worldBuffer: GPUBuffer;
+            practices: { cached: CachedSkillGpuData; params: PracticeGpuParams }[];
+        };
+        type GpuBodyWork = {
+            bi: number;
+            body: Body;
+            bTop: Body['top'];
+            cosD: number;
+            sinD: number;
+            boneGpuBuffer: GPUBuffer;
+            meshBoneBind: GpuMeshBoneBindContext;
+            gpuDeformedBuffers: (GPUBuffer | null)[];
+        };
+
+        const device = renderer.getDevice();
+        const queue = renderer.getQueue();
+        const animWorks: AnimWork[] = [];
+        const gpuBodyWorks: GpuBodyWork[] = [];
+        const gpuDeformedByBody = new Map<number, (GPUBuffer | null)[]>();
+        const gpuMeshBoneBindByBody = new Map<number, GpuMeshBoneBindContext>();
+
+        if (deformBackend === 'gpu') {
+            for (let bi = 0; bi < this._bodies.length; bi++) {
+                const body = this._bodies[bi];
+                if (!body.skeleton) continue;
+
+                const bTop = body.top;
+                const spinDeg = (body.direction || 0) + (body.spinOffset || 0);
+                const bodyDir = spinDeg * Math.PI / 180;
+                const cosD = Math.cos(bodyDir);
+                const sinD = Math.sin(bodyDir);
+
                 let btBuf = this._boneTransformBuffers.get(bi);
                 if (!btBuf || btBuf.floatCount < body.skeleton.length * BONE_TRANSFORM_FLOATS) {
                     btBuf?.destroy();
@@ -669,74 +875,276 @@ export class MooShowStage {
                     );
                     this._boneTransformBuffers.set(bi, btBuf);
                 }
-                packBoneTransforms(body.skeleton, btBuf.cpu);
-                btBuf.cpuDidWrite();
-                boneGpuBuffer = btBuf.ensureGpu(renderer.getDevice(), renderer.getQueue());
+
+                const boneCount = body.skeleton.length;
+                let boneGpuBuffer: GPUBuffer | null = null;
+                const useGpuAnim = animBackend === 'gpu'
+                    && body.practices.length > 0
+                    && body.skeletonBoneData;
+
+                if (useGpuAnim) {
+                    const skillCache = renderer.getGpuSkillCache();
+                    if (skillCache) {
+                        if (!body.boneNameToIndex) {
+                            const map = new Map<string, number>();
+                            for (let i = 0; i < boneCount; i++) {
+                                map.set(body.skeleton[i].name, i);
+                            }
+                            body.boneNameToIndex = map;
+                        }
+                        const boneNameToIndex = body.boneNameToIndex;
+
+                        const gpuPractices: { cached: CachedSkillGpuData; params: PracticeGpuParams }[] = [];
+                        let firstCached: CachedSkillGpuData | null = null;
+                        for (const p of body.practices) {
+                            if (!p.skill) continue;
+                            const cached = skillCache.getOrCreate(p.skill, body.skeletonBoneData!, boneNameToIndex);
+                            if (!firstCached) firstCached = cached;
+                            gpuPractices.push({
+                                cached,
+                                params: {
+                                    elapsed: p.elapsed,
+                                    weight: p.weight,
+                                    priority: p.priority,
+                                    opaque: p.opaque,
+                                    motionCount: cached.motionCount,
+                                    boneCount,
+                                    mixRootTranslation: p.mixRootTranslation,
+                                    mixRootRotation: p.mixRootRotation,
+                                },
+                            });
+                        }
+
+                        if (gpuPractices.length > 0 && firstCached) {
+                            gpuPractices.sort((a, b) => a.params.priority - b.params.priority);
+                            const localBytes = boneCount * BONE_TRANSFORM_FLOATS * 4;
+                            let localBuf = this._localPosesBuffers.get(bi);
+                            if (!localBuf || localBuf.size < localBytes) {
+                                localBuf?.destroy();
+                                localBuf = device.createBuffer({
+                                    label: `local-poses-${bi}`,
+                                    size: Math.max(localBytes, 16),
+                                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+                                });
+                                this._localPosesBuffers.set(bi, localBuf);
+                            }
+
+                            const priBytes = boneCount * 4;
+                            let priBuf = this._prioritiesBuffers.get(bi);
+                            if (!priBuf || priBuf.size < priBytes) {
+                                priBuf?.destroy();
+                                priBuf = device.createBuffer({
+                                    label: `priorities-${bi}`,
+                                    size: Math.max(priBytes, 16),
+                                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+                                });
+                                this._prioritiesBuffers.set(bi, priBuf);
+                            }
+
+                            const gpuBuf = btBuf.ensureGpu(device, queue);
+                            btBuf.gpuDidWrite();
+                            boneGpuBuffer = gpuBuf;
+                            animWorks.push({
+                                bi,
+                                boneCount,
+                                hierarchyBuffer: firstCached.hierarchyBuffer,
+                                depthOrderBuffer: firstCached.depthOrderBuffer,
+                                depthOffsetsBuffer: firstCached.depthOffsetsBuffer,
+                                depthLayerCount: firstCached.depthLayerCount,
+                                localPosesBuffer: localBuf,
+                                prioritiesBuffer: priBuf,
+                                worldBuffer: gpuBuf,
+                                practices: gpuPractices,
+                            });
+                        }
+                    }
+                }
+
+                if (!boneGpuBuffer) {
+                    packBoneTransforms(body.skeleton, btBuf.cpu);
+                    btBuf.cpuDidWrite();
+                    boneGpuBuffer = btBuf.ensureGpu(device, queue);
+                }
+
+                if (!body.boneNameToIndex) {
+                    const map = new Map<string, number>();
+                    for (let i = 0; i < boneCount; i++) {
+                        map.set(body.skeleton[i].name, i);
+                    }
+                    body.boneNameToIndex = map;
+                }
+                const meshBoneBind: GpuMeshBoneBindContext = {
+                    cacheKey: skeletonGpuBindingKey(body.skeleton, body.boneNameToIndex),
+                    boneNameToSkeletonIndex: body.boneNameToIndex,
+                };
+                gpuMeshBoneBindByBody.set(bi, meshBoneBind);
+
+                gpuBodyWorks.push({
+                    bi,
+                    body,
+                    bTop,
+                    cosD,
+                    sinD,
+                    boneGpuBuffer,
+                    meshBoneBind,
+                    gpuDeformedBuffers: [],
+                });
             }
+
+            if (gpuBodyWorks.length > 0) {
+                const computeEncoder = renderer.createComputeEncoder();
+
+                // Phase-batched animation pass:
+                //   init all bodies -> apply layer N across all bodies -> propagate all.
+                for (const work of animWorks) {
+                    renderer.encodeMultiPracticeGpuInit(
+                        computeEncoder,
+                        work.hierarchyBuffer,
+                        work.localPosesBuffer,
+                        work.prioritiesBuffer,
+                        work.boneCount,
+                    );
+                }
+
+                let maxPracticeLayers = 0;
+                for (const work of animWorks) {
+                    if (work.practices.length > maxPracticeLayers) maxPracticeLayers = work.practices.length;
+                }
+                for (let layer = 0; layer < maxPracticeLayers; layer++) {
+                    // Bucket by CachedSkillGpuData identity so bodies sharing
+                    // a skill dispatch together, maximizing bind-group cache
+                    // hits and GPU data-cache locality for keyframe buffers.
+                    const buckets = new Map<CachedSkillGpuData, AnimWork[]>();
+                    for (const work of animWorks) {
+                        const practice = work.practices[layer];
+                        if (!practice) continue;
+                        let bucket = buckets.get(practice.cached);
+                        if (!bucket) {
+                            bucket = [];
+                            buckets.set(practice.cached, bucket);
+                        }
+                        bucket.push(work);
+                    }
+                    for (const [cached, works] of buckets) {
+                        for (const work of works) {
+                            const practice = work.practices[layer]!;
+                            renderer.encodeMultiPracticeGpuApply(
+                                computeEncoder,
+                                cached,
+                                practice.params,
+                                work.localPosesBuffer,
+                                work.prioritiesBuffer,
+                            );
+                        }
+                    }
+                }
+
+                for (const work of animWorks) {
+                    renderer.encodeMultiPracticeGpuPropagate(
+                        computeEncoder,
+                        work.localPosesBuffer,
+                        work.hierarchyBuffer,
+                        work.depthOrderBuffer,
+                        work.depthOffsetsBuffer,
+                        work.worldBuffer,
+                        work.boneCount,
+                        work.depthLayerCount,
+                    );
+                }
+
+                if (tapAnim) {
+                    for (const work of gpuBodyWorks) {
+                        const bytes = work.body.skeleton ? work.body.skeleton.length * BONE_TRANSFORM_FLOATS * 4 : 0;
+                        if (bytes <= 0) continue;
+                        const tap = renderer.getTapBuffer(`bones-${work.bi}`, bytes);
+                        computeEncoder.copyBufferToBuffer(work.boneGpuBuffer, 0, tap, 0, bytes);
+                    }
+                }
+
+                for (const work of gpuBodyWorks) {
+                    const pre = topPhysicsToPreRotation(work.bTop, this._cameraTarget.y);
+                    let mi = 0;
+                    for (const { mesh } of work.body.meshes) {
+                        const deformedBuf = renderer.encodeDeformMeshGpu(
+                            computeEncoder,
+                            mesh,
+                            work.boneGpuBuffer,
+                            work.meshBoneBind,
+                        );
+                        work.gpuDeformedBuffers.push(deformedBuf);
+
+                        if (tapDeform && deformedBuf) {
+                            const bytes = mesh.vertices.length * DEFORMED_VERTEX_FLOATS * 4;
+                            const tap = renderer.getTapBuffer(`deform-${work.bi}-${mi}`, bytes);
+                            computeEncoder.copyBufferToBuffer(deformedBuf, 0, tap, 0, bytes);
+                        }
+
+                        if (deformedBuf) {
+                            const wtp: WorldTransformParams = {
+                                bodyRotCos: work.cosD,
+                                bodyRotSin: work.sinD,
+                                bodyX: work.body.x,
+                                bodyZ: work.body.z,
+                                preActive: pre.active,
+                                pivotY: pre.pivotY,
+                                preTransX: pre.transX,
+                                preTransZ: pre.transZ,
+                                preRotation: pre.rotation,
+                                scale: work.body.scale,
+                                vertexCount: mesh.vertices.length,
+                            };
+                            renderer.encodeWorldTransformGpu(computeEncoder, deformedBuf, wtp);
+                        }
+                        mi++;
+                    }
+                    gpuDeformedByBody.set(work.bi, work.gpuDeformedBuffers);
+                }
+
+                renderer.submitComputeEncoder(computeEncoder);
+            }
+        }
+
+        for (let bi = 0; bi < this._bodies.length; bi++) {
+            this._applyActorHighlight(renderer, bi);
+            const body = this._bodies[bi];
+            const bTop = body.top;
+            const spinDeg = (body.direction || 0) + (body.spinOffset || 0);
+            const bodyDir = spinDeg * Math.PI / 180;
+            const cosD = Math.cos(bodyDir);
+            const sinD = Math.sin(bodyDir);
+            const gpuDeformedBuffers = gpuDeformedByBody.get(bi) ?? [];
+            const gpuMeshBoneBind = gpuMeshBoneBindByBody.get(bi);
 
             let meshIndex = 0;
             for (const { mesh, boneMap, texture } of body.meshes) {
                 try {
-                    let verts: any[], norms: any[];
-                    let gpuDeformedBuffer: GPUBuffer | null = null;
-
-                    if (body.skeleton && deformBackend === 'gpu' && boneGpuBuffer) {
-                        gpuDeformedBuffer = renderer.deformMeshGpu(mesh, boneGpuBuffer);
-                        if (gpuDeformedBuffer) {
-                            // deformedOutput is persistent in the mesh cache — no destroy needed
-                        }
-                    }
-
-                    if (body.skeleton) {
-                        const deformed = deformMesh(mesh, body.skeleton, boneMap, {
-                            verbose: this._verbose,
-                        });
-                        verts = deformed.vertices;
-                        norms = deformed.normals;
-                    } else {
-                        verts = mesh.vertices;
-                        norms = mesh.normals;
-                    }
-
-                    if (this._validateDeformThisFrame && gpuDeformedBuffer && body.skeleton) {
-                        const readback = await renderer.readbackDeformedMeshForValidation(
-                            { bodyIndex: bi, meshIndex, vertexCount: verts.length },
-                            gpuDeformedBuffer,
-                        );
-                        if (readback) {
-                            const cpuPacked = new Float32Array(verts.length * DEFORMED_VERTEX_FLOATS);
-                            for (let vi = 0; vi < verts.length; vi++) {
-                                const o = vi * DEFORMED_VERTEX_FLOATS;
-                                const v = verts[vi]; const n = norms[vi];
-                                if (v) { cpuPacked[o] = v.x; cpuPacked[o + 1] = v.y; cpuPacked[o + 2] = v.z; }
-                                if (n) { cpuPacked[o + 3] = n.x; cpuPacked[o + 4] = n.y; cpuPacked[o + 5] = n.z; }
-                            }
-                            const cmp = compareInspectionTaps(cpuPacked, readback.data, this._pipelineValidation.maxAbsError);
-                            if (cmp.mismatchCount > 0) {
-                                const msg = `[pipeline validation] body ${bi} mesh ${meshIndex} "${mesh.name}": ${cmp.mismatchCount} mismatches, maxAbsDiff=${cmp.maxAbsDiff.toExponential(3)}, firstAt float ${cmp.firstMismatchIndex}`;
-                                console.warn(msg);
-                                if (this._pipelineValidation.throwOnMismatch) throw new Error(msg);
-                            } else if (this._verbose) {
-                                console.log(`[pipeline validation] OK body ${bi} mesh ${meshIndex} "${mesh.name}" maxAbsDiff=${cmp.maxAbsDiff.toExponential(3)}`);
-                            }
-                        }
-                    }
-
-                    const canUseGpuDraw = gpuDeformedBuffer &&
-                        deformBackend === 'gpu' &&
-                        !bTop.active &&
-                        body.x === 0 && body.z === 0 && bodyDir === 0;
-
-                    if (canUseGpuDraw && gpuDeformedBuffer) {
+                    const gpuDeformedBuffer = gpuDeformedBuffers[meshIndex] ?? null;
+                    if (gpuDeformedBuffer && gpuMeshBoneBind) {
                         renderer.drawMeshFromGpuDeformed(mesh, gpuDeformedBuffer, texture || null, {
                             type: ObjectIdType.CHARACTER,
                             objectId: bi,
                             subObjectId: meshIndex,
-                        });
+                        }, gpuMeshBoneBind);
                     } else {
+                        let verts: any[];
+                        let norms: any[];
+                        if (body.skeleton) {
+                            const deformed = deformMesh(mesh, body.skeleton, boneMap, { verbose: this._verbose });
+                            verts = deformed.vertices;
+                            norms = deformed.normals;
+                        } else {
+                            verts = mesh.vertices;
+                            norms = mesh.normals;
+                        }
+
                         if (bTop.active) {
                             verts = verts.map((v: any) => applyTopTransform(v, bTop, this._cameraTarget.y));
-                            norms = norms.map((v: any) => applyTopTransform(v, bTop, this._cameraTarget.y));
+                            norms = norms.map((v: any) => applyTopRotation(v, bTop));
+                        }
+
+                        const s = body.scale;
+                        if (s !== 1) {
+                            verts = verts.map((v: any) => v ? { x: v.x * s, y: v.y * s, z: v.z * s } : v);
                         }
 
                         if (body.x !== 0 || body.z !== 0 || bodyDir !== 0) {
@@ -760,16 +1168,98 @@ export class MooShowStage {
                             subObjectId: meshIndex,
                         });
                     }
-                } catch { /* skip bad mesh */ }
+                } catch {
+                    // Skip malformed mesh entries; continue rendering remaining meshes.
+                }
                 meshIndex++;
+            }
+        }
+
+        if (tapAnim || tapDeform) {
+            this._lastValidation.frame = this._validationFrameCounter;
+            this._lastValidation.anim = null;
+            this._lastValidation.deform = null;
+            const structured: ValidationSnapshot = {
+                frame: this._validationFrameCounter,
+                animation: [],
+                deformation: [],
+            };
+            this._lastValidationStructured = structured;
+            const shouldThrow = this._pipelineValidation.throwOnMismatch;
+
+            for (let bi = 0; bi < this._bodies.length; bi++) {
+                const body = this._bodies[bi];
+                if (!body.skeleton) continue;
+
+                if (tapAnim) {
+                    const gpuData = await renderer.readbackTap(`bones-${bi}`);
+                    if (gpuData) {
+                        const cmp = compareBoneTransforms(body.skeleton, gpuData, this._pipelineValidation.maxAbsError);
+                        const msg = cmp.posExceedCount > 0 || cmp.rotExceedCount > 0
+                            ? `body${bi}: pos ${cmp.posExceedCount}/${cmp.boneCount} rot ${cmp.rotExceedCount}/${cmp.boneCount} maxP=${cmp.posMaxErr.toExponential(2)} maxR=${cmp.rotMaxErr.toExponential(2)}`
+                            : `body${bi}: OK maxP=${cmp.posMaxErr.toExponential(2)} maxR=${cmp.rotMaxErr.toExponential(2)}`;
+                        this._lastValidation.anim = msg;
+                        const animOk = cmp.posExceedCount === 0 && cmp.rotExceedCount === 0;
+                        structured.animation.push({
+                            bodyIndex: bi,
+                            boneCount: cmp.boneCount,
+                            posMaxErr: cmp.posMaxErr,
+                            rotMaxErr: cmp.rotMaxErr,
+                            posExceedCount: cmp.posExceedCount,
+                            rotExceedCount: cmp.rotExceedCount,
+                            ok: animOk,
+                        });
+                        if (!animOk) {
+                            console.warn(`[tap:anim] ${msg}`);
+                            if (shouldThrow) throw new Error(`[tap:anim] ${msg}`);
+                        } else if (this._verbose) {
+                            console.log(`[tap:anim] ${msg}`);
+                        }
+                    }
+                }
+
+                if (tapDeform) {
+                    let mi = 0;
+                    for (const { mesh, boneMap } of body.meshes) {
+                        const gpuData = await renderer.readbackTap(`deform-${bi}-${mi}`);
+                        if (gpuData) {
+                            const deformed = deformMesh(mesh, body.skeleton!, boneMap, { verbose: false });
+                            const cmp = compareDeformedVertices(deformed.vertices, deformed.normals, gpuData, this._pipelineValidation.maxAbsError);
+                            const msg = cmp.posExceedCount > 0 || cmp.normExceedCount > 0
+                                ? `body${bi}/${mesh.name}: pos ${cmp.posExceedCount}/${cmp.vertexCount} norm ${cmp.normExceedCount}/${cmp.vertexCount} maxP=${cmp.posMaxErr.toExponential(2)} maxN=${cmp.normMaxErr.toExponential(2)}`
+                                : `body${bi}/${mesh.name}: OK maxP=${cmp.posMaxErr.toExponential(2)} maxN=${cmp.normMaxErr.toExponential(2)}`;
+                            this._lastValidation.deform = msg;
+                            const deformOk = cmp.posExceedCount === 0 && cmp.normExceedCount === 0;
+                            structured.deformation.push({
+                                bodyIndex: bi,
+                                meshIndex: mi,
+                                meshName: mesh.name,
+                                vertexCount: cmp.vertexCount,
+                                posMaxErr: cmp.posMaxErr,
+                                normMaxErr: cmp.normMaxErr,
+                                posExceedCount: cmp.posExceedCount,
+                                normExceedCount: cmp.normExceedCount,
+                                ok: deformOk,
+                            });
+                            if (!deformOk) {
+                                console.warn(`[tap:deform] ${msg}`);
+                                if (shouldThrow) throw new Error(`[tap:deform] ${msg}`);
+                            } else if (this._verbose) {
+                                console.log(`[tap:deform] ${msg}`);
+                            }
+                        }
+                        mi++;
+                    }
+                }
             }
         }
 
         if (this._bodies.length > 0) {
             renderer.setHighlight(0, 0, 0, 0);
             const now = performance.now();
+            // Plumb-bob spin is wall-clock UI (Sims-style diamond keeps rotating); pause only freezes sim bob.
             const plumbRot = now * 0.001 * Math.PI;
-            const bob = Math.sin(now * 0.002) * 0.12;
+            const bob = this._paused ? 0 : Math.sin(now * 0.002) * 0.12;
             const RISE_MS = 120;
             const THROB_MS = 220;
             const THROB_AMP = 0.18;
@@ -788,7 +1278,7 @@ export class MooShowStage {
 
             const drawPlumbBob = (bi: number, body: Body) => {
                 if (!body.skeleton) return;
-                const headBone = body.skeleton.find((b: any) => b.name === 'HEAD');
+                const headBone = findBone(body.skeleton, 'HEAD');
                 if (!headBone) return;
                 const bTop = body.top;
                 const sd = (body.direction || 0) + (body.spinOffset || 0);
@@ -808,6 +1298,7 @@ export class MooShowStage {
                 renderer.drawDiamond(
                     rx + body.x, hy + yOffset, rz + body.z, size, plumbRot, c.r, c.g, c.b, 0.9,
                     { type: ObjectIdType.PLUMB_BOB, objectId: bi },
+                    headBone.worldRotation,
                 );
                 this.hooks.onPlumbBobChange?.(bi, true);
             };
@@ -920,6 +1411,7 @@ export class MooShowStage {
 
             this.spin.zoom = Math.max(15, Math.min(400, this.spin.zoom + zoomDelta));
             this.spin.rotX = Math.max(-89, Math.min(89, this.spin.rotX + tiltDelta));
+            this._emitOrbitViewSync();
             this._renderFrame();
         });
 
@@ -931,6 +1423,7 @@ export class MooShowStage {
         c.addEventListener('wheel', (e: WheelEvent) => {
             e.preventDefault();
             this.spin.applyWheel(e.deltaY, e.deltaMode, e.ctrlKey);
+            this._emitOrbitViewSync();
             this._renderFrame();
         }, { passive: false });
 
@@ -995,15 +1488,6 @@ export class MooShowStage {
                     this.selectActor(idx);
                 }
                 e.preventDefault();
-            }
-
-            if (e.key === '?' || e.key === 'h') { this.hooks.onKeyAction?.('toggleHelp'); e.preventDefault(); }
-            if (e.key === 'Escape') { this.hooks.onKeyAction?.('toggleHelp'); e.preventDefault(); }
-
-            if (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
-                this.hooks.onKeyAction?.('toggleDebug');
-                e.preventDefault();
-                return;
             }
 
             if (e.key === 'n') { this.hooks.onKeyAction?.('stepSceneNext'); e.preventDefault(); }

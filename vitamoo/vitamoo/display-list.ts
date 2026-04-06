@@ -1,4 +1,12 @@
-import type { MeshData, Vec3, Quat } from './types.js';
+import {
+    type MeshData,
+    type Vec3,
+    type Quat,
+    quatRotateVec3,
+    vec3Scale,
+    quatNormalize,
+    quatConjugate,
+} from './types.js';
 
 /**
  * Display list: unified representation for all drawing — characters, props, terrain,
@@ -121,6 +129,42 @@ export function transformMesh(
             x: n.x * cos - n.z * sin,
             y: n.y,
             z: n.x * sin + n.z * cos,
+        });
+    }
+    return { vertices, normals };
+}
+
+/**
+ * Like {@link transformMesh}, but first rotates vertices/normals by the inverse of
+ * `boneWorldRotation` so the mesh stays world-axis aligned (e.g. plumb bob above a tilted head).
+ * Then applies Y spin + translation like {@link transformMesh}.
+ */
+export function transformMeshUpright(
+    mesh: MeshData,
+    x: number, y: number, z: number,
+    boneWorldRotation: Quat,
+    rotYRad: number,
+    scale: number,
+): { vertices: Vec3[]; normals: Vec3[] } {
+    const qInv = quatConjugate(quatNormalize(boneWorldRotation));
+    const cos = Math.cos(rotYRad);
+    const sin = Math.sin(rotYRad);
+    const vertices: Vec3[] = [];
+    const normals: Vec3[] = [];
+    for (let i = 0; i < mesh.vertices.length; i++) {
+        const v = mesh.vertices[i];
+        const n = mesh.normals[i];
+        const vq = quatRotateVec3(qInv, vec3Scale(v, scale));
+        const nq = quatRotateVec3(qInv, n);
+        vertices.push({
+            x: (vq.x * cos - vq.z * sin) + x,
+            y: vq.y + y,
+            z: (vq.x * sin + vq.z * cos) + z,
+        });
+        normals.push({
+            x: nq.x * cos - nq.z * sin,
+            y: nq.y,
+            z: nq.x * sin + nq.z * cos,
         });
     }
     return { vertices, normals };

@@ -3,8 +3,14 @@ export type KeyAction =
     | 'stepActorNext' | 'stepActorPrev'
     | 'stepCharacterNext' | 'stepCharacterPrev'
     | 'stepAnimationNext' | 'stepAnimationPrev'
-    | 'togglePause' | 'toggleHelp' | 'toggleDebug'
+    | 'togglePause'
     | 'setSpeed';
+
+export interface OrbitViewState {
+    rotY: number;
+    rotX: number;
+    zoom: number;
+}
 
 export interface MooShowHooks {
     onPick?: (actorIndex: number, x: number, y: number) => void;
@@ -15,4 +21,6 @@ export interface MooShowHooks {
     onSceneChange?: (sceneName: string | null) => void;
     onAnimationTick?: (time: number) => void;
     onKeyAction?: (action: KeyAction, value?: number) => void;
+    /** Canvas / wheel / drag changed stage orbit (sync sliders in the host UI). */
+    onOrbitViewChange?: (state: OrbitViewState) => void;
 }

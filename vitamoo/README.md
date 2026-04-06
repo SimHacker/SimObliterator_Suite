@@ -42,7 +42,7 @@ Shader display modes still use **`?debugSlice=0`** … **`6`** (see Default cont
 - **Browser viewer with your UI:** depend on `mooshow`; create a stage, load a content index, wire hooks to your components.
 - **Full demo:** use or fork `vitamoospace`; swap assets and content index to rebrand.
 
-See **DOCUMENTATION.md** in this directory for full API and layer boundaries, data formats, and how to extend or build on top. **WebGPU renderer:** **[docs/README.md](docs/README.md)** (spec, status, GPU-deformation checklist).
+See **[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)** for full API and layer boundaries, data formats, and how to extend or build on top. **Layer refactor (phases):** **[docs/REFACTOR-PLAN.md](docs/REFACTOR-PLAN.md)**. **WebGPU renderer index:** **[docs/README.md](docs/README.md)** (spec, status, GPU-deformation checklist).
 
 ---
 
@@ -99,8 +99,6 @@ Bindings below are implemented in **`mooshow`** on the stage canvas (skipped whi
 | **E** / **Q** | Next / previous **animation**. |
 | **↑** / **↓** | Zoom in / out (held). |
 | **←** / **→** | Spin (held; speed ramps up over time). |
-| **H**, **?** | Toggle help (app hook). |
-| **Escape** | Toggle help (app hook). |
 
 ### Shader debug (URL only)
 
