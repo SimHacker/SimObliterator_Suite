@@ -146,6 +146,17 @@
 		if (i >= 0 && i < presets.length) presets[i].apply();
 	}
 
+	let presetSyncedForStage: MooShowStage | null = null;
+	$effect(() => {
+		if (!stage) {
+			presetSyncedForStage = null;
+			return;
+		}
+		if (presetSyncedForStage === stage) return;
+		presetSyncedForStage = stage;
+		applySelectedPreset();
+	});
+
 	const epsilonOptions = [1e-2, 5e-3, 1e-3, 5e-4, 1e-4, 1e-5];
 	const cadenceOptions = [1, 5, 10, 30, 60, 120];
 

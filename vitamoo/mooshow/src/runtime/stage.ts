@@ -1295,10 +1295,11 @@ export class MooShowStage {
                 const yOffset = (1.5 + bob) * (isSelected ? riseFactor : 1);
                 const size = basePlumbSize * (isSelected ? throbScale : 1);
                 const c = this._plumbBobColor;
+                // Diamond verts are world-up Y; only plumbRot (Y spin) applies. headBone.worldRotation inverse
+                // is for bone-local meshes and tipped the bob 90°.
                 renderer.drawDiamond(
                     rx + body.x, hy + yOffset, rz + body.z, size, plumbRot, c.r, c.g, c.b, 0.9,
                     { type: ObjectIdType.PLUMB_BOB, objectId: bi },
-                    headBone.worldRotation,
                 );
                 this.hooks.onPlumbBobChange?.(bi, true);
             };

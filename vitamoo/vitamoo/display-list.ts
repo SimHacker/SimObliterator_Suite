@@ -136,8 +136,10 @@ export function transformMesh(
 
 /**
  * Like {@link transformMesh}, but first rotates vertices/normals by the inverse of
- * `boneWorldRotation` so the mesh stays world-axis aligned (e.g. plumb bob above a tilted head).
- * Then applies Y spin + translation like {@link transformMesh}.
+ * `boneWorldRotation`. Use only when mesh vertices are defined in **that bone's local space**
+ * (already transformed by the bone); then undoing the bone world rotation keeps the object
+ * world-axis aligned. For meshes already authored in world-up space (e.g. procedural plumb bob),
+ * pass only {@link transformMesh} — do not pass bone rotation.
  */
 export function transformMeshUpright(
     mesh: MeshData,

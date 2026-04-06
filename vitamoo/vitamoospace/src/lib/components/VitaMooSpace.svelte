@@ -469,6 +469,7 @@
 				stage = createMooShowStage({
 					canvas: el,
 					assetsBaseUrl,
+					characterPipeline: { animation: 'gpu', deformation: 'gpu' },
 					hooks: {
 						onOrbitViewChange: (s) => {
 							if (cancelled) return;
@@ -767,7 +768,7 @@
 				{:else if sidebarTab === 'help'}
 				<div class="help-tab sidebar-tab-panel" role="tabpanel">
 					<h2 class="help-tab-title">Spin the Sims!</h2>
-					<p class="help-intro">Click and drag to spin. Click a Sim to select them.</p>
+					<p class="help-intro">Click and drag to spin.<br />Click a Sim to select them.</p>
 					<table class="help-keys">
 						<tbody>
 							<tr><th colspan="2">Navigate</th></tr>
