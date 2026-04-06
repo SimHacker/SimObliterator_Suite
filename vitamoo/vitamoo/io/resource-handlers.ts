@@ -1,14 +1,19 @@
-// Pluggable parsers for IFF resource payloads (by FourCC). Register handlers on a
-// ResourceHandlerRegistry and run parseOrNull for unknown types.
+// Pluggable parsers for IFF resource payloads (by FourCC).
+// Matches the Python @register_chunk / CHUNK_TYPES / get_chunk_class pattern
+// in SimObliterator src/formats/iff/base.py.
+//
+// Register handlers on a ResourceHandlerRegistry, then call parseOrNull()
+// to dispatch by type code. Unknown types return null (equivalent to Python's
+// UnknownChunk fallback).
 
-import type { MaxisIff1Resource } from './iff-maxis.js';
+import type { IffChunkInfo } from './iff-types.js';
 
 export interface ResourceParseContext {
-    /** Full IFF file (caller may slice per resource). */
+    /** Full IFF file buffer (for cross-chunk references if needed). */
     fileBuffer: ArrayBuffer;
-    /** Resource metadata from listMaxisIff1Resources. */
-    resource: MaxisIff1Resource;
-    /** Payload only (same as slice from getMaxisIff1ResourceData). */
+    /** Unified chunk descriptor — works for both IFF 1.0 and 2.x. */
+    resource: IffChunkInfo;
+    /** Payload only (same as getIffChunkData slice). */
     data: ArrayBuffer;
 }
 
@@ -33,9 +38,13 @@ export class ResourceHandlerRegistry {
         return this.map.get(typeFourCC);
     }
 
+    has(typeFourCC: string): boolean {
+        return this.map.has(typeFourCC);
+    }
+
     /** Returns handler output, or `null` if no handler is registered for this FourCC. */
     parseOrNull(ctx: ResourceParseContext): unknown | null {
-        const h = this.map.get(ctx.resource.header.typeFourCC);
+        const h = this.map.get(ctx.resource.typeFourCC);
         return h ? h.parse(ctx) : null;
     }
 
