@@ -29,8 +29,8 @@ export function createDiamondMesh(
         const next = (i + 1) % segments;
         const a = eq[i];
         const b = eq[next];
-        const triTop = [a, b, top];
-        const triBot = [b, a, bot];
+        const triTop = [b, a, top];
+        const triBot = [a, b, bot];
         for (const tri of [triTop, triBot]) {
             const n = normalFromTri(tri[0], tri[1], tri[2]);
             for (let j = 0; j < 3; j++) {

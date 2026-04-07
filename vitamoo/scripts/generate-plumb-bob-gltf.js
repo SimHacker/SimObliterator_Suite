@@ -38,7 +38,7 @@ for (let i = 0; i < segments; i++) {
   const next = (i + 1) % segments;
   const a = eq[i];
   const b = eq[next];
-  for (const tri of [[a, b, top], [b, a, bot]]) {
+  for (const tri of [[b, a, top], [a, b, bot]]) {
     const n = normalFromTri(tri[0], tri[1], tri[2]);
     for (let j = 0; j < 3; j++) {
       positions.push(tri[j].x, tri[j].y, tri[j].z);
