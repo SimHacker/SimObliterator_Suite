@@ -18,7 +18,7 @@ export interface MooShowHooks {
     onSelectionChange?: (actorIndex: number | null) => void;
     onHighlight?: (actorIndex: number | null) => void;
     onPlumbBobChange?: (actorIndex: number | null, visible: boolean) => void;
-    onSceneChange?: (sceneName: string | null) => void;
+    onSceneIdChange?: (sceneId: string | null) => void;
     onAnimationTick?: (time: number) => void;
     onKeyAction?: (action: KeyAction, value?: number) => void;
     /** Canvas / wheel / drag changed stage orbit (sync sliders in the host UI). */

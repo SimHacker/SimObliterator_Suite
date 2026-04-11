@@ -160,6 +160,7 @@ export class MooShowStage {
     private _bodies: Body[] = [];
     private _selectedActor = -1;
     private _activeScene: string | null = null;
+    private _activeSceneId: string | null = null;
     private _cameraTarget: Vec3 = { x: 0, y: 2.5, z: 0 };
     private _plumbBobUrl: string | undefined;
     private _plumbBobScale: number;
@@ -388,6 +389,7 @@ export class MooShowStage {
         if (ren) ren.setPlumbBobUiLighting(ambient, diffuse);
     }
     get activeScene(): string | null { return this._activeScene; }
+    get activeSceneId(): string | null { return this._activeSceneId; }
     get paused(): boolean { return this._paused; }
     get running(): boolean { return this._running; }
 
@@ -396,9 +398,15 @@ export class MooShowStage {
     get skillNames(): string[] { return Object.keys(this.loader.store.skills); }
 
     async loadContentIndex(url: string, onProgress?: (msg: string) => void): Promise<ContentIndex> {
-        const idx = await this.loader.loadIndex(url);
-        await this.loader.loadAllContent(onProgress);
-        return idx;
+        const snapshot = this.loader.snapshotState();
+        try {
+            const idx = await this.loader.loadIndex(url);
+            await this.loader.loadAllContent(onProgress);
+            return idx;
+        } catch (error) {
+            this.loader.restoreState(snapshot);
+            throw error;
+        }
     }
 
     async setScene(sceneIndex: number): Promise<void> {
@@ -410,6 +418,7 @@ export class MooShowStage {
         this._clearHover();
         this._bodies = newBodies;
         this._activeScene = scenes[sceneIndex].name;
+        this._activeSceneId = scenes[sceneIndex].id;
         this._selectedActor = newBodies.length === 1 ? 0 : -1;
 
         if (newBodies.length > 0) {
@@ -419,7 +428,7 @@ export class MooShowStage {
             this._cameraTarget = { x: cx, y: 2.5, z: cz };
         }
 
-        this.hooks.onSceneChange?.(this._activeScene);
+        this.hooks.onSceneIdChange?.(this._activeSceneId);
         this.hooks.onSelectionChange?.(this._selectedActor);
         this._renderFrame();
     }
@@ -428,6 +437,7 @@ export class MooShowStage {
         const chars = this.loader.index?.characters;
         if (!chars?.[charIndex]) return;
         this._activeScene = null;
+        this._activeSceneId = null;
         const body = await this.loader.loadCharacterBody(chars[charIndex]);
         this._destroyBodyGpuScratch();
         this._clearHover();
@@ -437,7 +447,7 @@ export class MooShowStage {
             this._computeCameraTarget(body.skeleton);
             this.sound.simlishGreet(0, this._bodies);
         }
-        this.hooks.onSceneChange?.(null);
+        this.hooks.onSceneIdChange?.(null);
         this.hooks.onSelectionChange?.(this._selectedActor);
         this._renderFrame();
     }

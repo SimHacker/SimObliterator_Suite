@@ -142,8 +142,77 @@ Focused API: dataclasses for **FamilyData**, **NeighborData**, **PersonData** (i
 2. **STR# decoder** (minimal): enough to read **appearance strings** and labels.
 3. **FAMI + NBRS** decoder: families, neighbor ids, GUIDs, names, links to **User** files as in Python.
 4. **L0 + path conventions:** document **Legacy Collection** vs **Classic** user-data layouts the same way `save_manager.find_neighborhood` tries multiple roots; ship **memory** + **Node** L0 for CI.
+5. **Filesystem discovery and classification:** scan user-selected install/save/mod roots, classify directories/files robustly, and build an internal inventory model from raw files (no dependency on external precomputed JSON formats). Respect disabled suffixes: paths ending in `-disabled` (for example `foo.iff-disabled`) are skipped during recursive intake, except when the user explicitly registers a disabled file as a root to inspect it directly.
 
-**Exit:** From a **userData root** (browser: directory picked once), list neighborhoods, load **Neighborhood.iff**, enumerate **all neighbors** with stable ids.
+**Exit:** From one or more selected roots (install/save/mod), list neighborhoods, load **Neighborhood.iff**, and enumerate **all neighbors** with stable ids from our own scan inventory.
+
+#### Phase A1 — Roots/Catalog v1 coding plan (implementation order)
+
+This is the concrete start sequence for coding the first `Roots` and `Catalog` tabs.
+
+1. **Decisions (lock these first):**
+   - Node-first scan runtime (SvelteKit server endpoints + local filesystem access).
+   - Browser-only mode is optional later (File System Access API + SQLite WASM).
+   - Raw-file ingestion is authoritative; external JSON formats are optional comparison inputs only.
+   - Disabled assets are always skipped: any file or directory path ending in `-disabled` is excluded.
+   - Multi-root scanning is default (multiple installs/saves/object folders in one inventory).
+   - A root can point to a directory, a single file, or an interchange manifest/package.
+   - Each root has an explicit `rootType` (`local-path` first; more types later) and a free-form `rootMetadata` object for type/provider-specific settings.
+   - Each root carries user-editable provenance metadata (`name`, `description`) shown to diagnostics and LLM tooling.
+   - Instead of a single root kind enum, each root carries content-type checkboxes (`all` plus specific content classes) that act as scan filters and provenance hints.
+   - Family albums are first-class content in this model (`familyAlbums`), not optional side data.
+   - Root records also store permission metadata (provider, token handle/id, status) so re-grant flows can be explicit.
+   - Default root name is derived from basename (file suffix removed when present) and made unique with an id suffix when needed.
+   - Future pass: a root can also represent remote catalog sources (for example Sims community sites) and service-backed manifests, not just local filesystem paths.
+
+2. **Data contracts (`sims-io` package):**
+   - `ScanRoot` (`id`, `rootType`, `rootMetadata`, `name`, `description`, `path`, `enabled`, `addedAt`, `contentSelection`, `discoveryBuckets`, permission metadata, `lastScannedAt`).
+   - `discoveryBuckets` stores sparse maps of `CatalogRef[]` keyed by names (for example `byContentType.objects` and `byObjectKind.OBJD`); counts are derived (`bucket.length`) instead of duplicated numeric counters.
+   - `ScanRun` (`id`, `startedAt`, `finishedAt`, `status`, `rootIds`, aggregate counts).
+   - `FileEntry` (`id`, `rootId`, `path`, `name`, `size`, `mtimeMs`, `kind`, `containerId?`, hashes optional).
+   - `ContainerEntry` (`id`, `fileId`, `containerKind`, `memberCount`).
+   - `ObjectEntry` (`id`, `fileId`, `containerId?`, `objectKind`, `guid?`, `resourceId?`, `label?`).
+   - `ChunkEntry` (`id`, `objectId?`, `fileId`, `chunkType`, `chunkId`, `offset`, `size`).
+   - `GuidReferenceEntry` (`fromObjectId`, `toGuid`, `sourceChunk`, `evidence`).
+   - `ParseIssue` (`id`, `fileId`, `severity`, `code`, `message`, `context`).
+   - Future extension (`CatalogRootSource`): arbitrary source metadata for non-filesystem roots, including fields such as `siteUrl`, `serviceUrl`, `username`, `password`, and additional provider-specific key/value metadata.
+   - Future extension (`CatalogRootCapabilities`): source capability flags for `search`, `filter`, `incrementalSync`, `subscriberDownloads`, and `publish`.
+
+3. **SQLite schema and indexes (Node first):**
+   - Tables: `scan_roots`, `scan_runs`, `scan_run_roots`, `files`, `containers`, `objects`, `chunks`, `guid_references`, `parse_issues`.
+   - Indexes: `files(root_id, path)`, `objects(guid)`, `chunks(chunk_type, chunk_id)`, `guid_references(to_guid)`.
+   - Constraints: stable ids, foreign keys on, deterministic upsert keys (`root_id + path` for files).
+
+4. **Classifier and scan pipeline:**
+   - Recursive walk from each enabled root, with explicit skip rules (`-disabled`, hidden/system paths if configured).
+   - Classify by bytes/structure first (magic headers/chunk tables), not filename extensions.
+   - Container-aware expansion (FAR members, IFF chunks/resources) into normalized child records.
+   - Detect family album resources in IFF (`PICT`/`CMMT`) and represent them explicitly in browse/export surfaces.
+   - Interchange roots are tracked in the root map for association/provenance but can be skipped by raw-byte scanners.
+   - Robust failure model: one bad file emits `ParseIssue` and scan continues.
+
+5. **Server API (vitamoospace):**
+   - `GET /api/files/roots` -> list roots.
+   - `POST /api/files/roots` -> add root (`path`, `rootType`, optional `rootMetadata`, optional `name`, optional `description`, `contentSelection`, optional permission metadata).
+   - `DELETE /api/files/roots/:id` -> remove root.
+   - `PATCH /api/files/roots/:id` -> edit root metadata (`rootType`, `rootMetadata`, `name`, `description`, `enabled`, `contentSelection`, permission metadata).
+   - `POST /api/files/roots/:id/regrant` -> mark permission re-granted and refresh permission metadata.
+   - `POST /api/files/scan` -> start scan for selected roots.
+   - `GET /api/files/scan/:id` -> run status and counts.
+   - `GET /api/files/catalog` -> paged query for catalog records (filters: root, row kind, object kind, guid, chunk type, text, album content).
+
+6. **UI tabs (VitaMooSpace):**
+   - Add sidebar tabs: `Roots` and `Catalog`.
+   - `Roots` tab: root list, add/remove controls, name/description metadata, content-type filter checkboxes (user intent), parallel discovered-item counts derived from `discoveryBuckets` (observed results), object-kind bucket preview (for example `OBJD`, `far-member`, `family-album-image`) with jump-through into Catalog filters, permission/regrant indicators, scan/rescan controls, latest run summary.
+   - `Catalog` tab: filter bar + paged table/tree for files/objects/chunks/issues, including object-kind filtering sourced from root discovery buckets; row details pane for metadata and references.
+   - Keep current Demo/Help/Debug tabs unchanged while this lands.
+
+7. **First coding milestone acceptance:**
+   - User can register multiple roots.
+   - Scan runs and completes with per-root/file/object/chunk counts.
+   - Paths ending in `-disabled` are absent from results.
+   - Catalog tab can query and display discovered records without loading full file payloads into UI memory.
+   - Family album resources are detectable and browseable as explicit records.
 
 ### Phase B — Milestone 1: “All people → VitaMoo”
 
@@ -175,8 +244,18 @@ Focused API: dataclasses for **FamilyData**, **NeighborData**, **PersonData** (i
 Work follows **§6** (layered interchange and fidelity profiles). In short:
 
 1. **OBJD/OBJF/SPR/DGRP** resolution and preview (2D first, 3D holodeck later per vitamoo design docs).
-2. **Simantics (BHAV)** and other structured chunks: **YAML** (and **JSON** where automation prefers it) as the edit surface; round-trip **decode → edit → encode** into chunk bytes.
-3. **Transmogrifier-class** flows: partial export, **patch bundles**, and **derived channel regeneration** (RGB / alpha / Z / zoom) per **fidelity profile**; full interchange with [`gltf-extras-metadata.md`](./gltf-extras-metadata.md) and GPU readback ideas in [`gpu-assets-tooling-roadmap.md`](./gpu-assets-tooling-roadmap.md) where relevant.
+2. **GUID collision triage before mutation:** ingest GUID -> object lists, exact-match groups, and similarity matrices for one warning per colliding GUID; treat base-game and expansion objects as immutable anchors. Keep scanners analysis-only: emit complete identifiers/context, then let Cursor/MOOLLM choose remediation tools in a separate disposition phase. For higher-level MOOLLM/human-assisted resolution, run a preflight graph pass over all objects: extract GUID references from Simantics/chunk code, annotate container/path provenance (FAR or directory overlap), and use that graph to preserve coherent inter-object intent during re-GUID decisions. Current groundwork: `vitamoo/io/guid-collision.ts`. See [`guid-collision-analysis-plan.md`](./guid-collision-analysis-plan.md).
+3. **Simantics (BHAV)** and other structured chunks: **YAML** (and **JSON** where automation prefers it) as the edit surface; round-trip **decode → edit → encode** into chunk bytes.
+4. **Transmogrifier-class** flows: partial export, **patch bundles**, and **derived channel regeneration** (RGB / alpha / Z / zoom) per **fidelity profile**; full interchange with [`gltf-extras-metadata.md`](./gltf-extras-metadata.md) and GPU readback ideas in [`gpu-assets-tooling-roadmap.md`](./gpu-assets-tooling-roadmap.md) where relevant.
+5. **Object SQL corpus for higher-level tooling:** scan all objects across selected directories/FARs and export a normalized SQLite database of objects, chunks, GUID references, and provenance so MOOLLM/human-assisted workflows can query intent and relationship graphs directly. Primary target is Node-side batch tooling; optional local browser path can use SQLite WASM (or equivalent) for user-selected saves, with optional read-only publication via Datasette.
+6. **Viewer workflow for root management and browsing:** add `Roots` and `Catalog` app tabs so users can add/remove scan roots, annotate roots with provenance names/descriptions, configure content-type filters, manage permission status/regrant, trigger rescans, and explore discovered objects/files/chunks from the normalized inventory.
+7. **Interchange root association workflow:** roots can be exported to interchange bundles and interchange bundles can be registered as roots; this preserves source association so later collision/disposition reports can cite both filesystem provenance and interchange provenance for the same object sets.
+8. **Family album exchange workflow:** include family album assets/metadata in the same root-based interchange pipeline used for families/houses/objects, with support for both literal copy and decoded interchange forms (for example JSON/YAML metadata plus image/zip payloads) so upload/download stays coherent.
+9. **Remote catalog roots and hosted sharing workflow (future pass):** support roots backed by online JSON/YAML feeds and service APIs (for example SimFreaks/Simslice/Zombie Sims-style catalogs), with root-level login metadata, dynamic/incremental sync, server-side search/filter, and optional publish surfaces for user-created collections.
+10. **Per-root filter and cache workflow (future pass):** treat root filters as first-class query constraints for what enters the unified catalog, support partial metadata fetch from remote roots (no full-site scrape required), and allow chunked/streamed hydration with persistent cache state.
+11. **Root driver architecture (future pass):** implement pluggable drivers for each remote catalog service (first-party service first, then third-party Sims sites), with capabilities for incremental search, metadata listing, object download, object upload, and provider-specific pagination/sync checkpoints.
+12. **Root I/O policy and sharing controls (future pass):** model roots as both inputs and outputs (including local directory export/upload and remote publish/upload), with explicit controls over what is uploaded, what is shared publicly vs private backup, and what is written to local disk.
+13. **Install-set and save virtualization workflow (future pass):** add tools to stage/activate/deactivate object sets for a game installation, park inactive packages aside, and orchestrate stop/switch/start loops around the game process; extend the same model to virtualized Sims save-file sets for safe profile switching.
 
 ---
 

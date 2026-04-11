@@ -11,8 +11,10 @@ Focused notes for the **WebGPU renderer** and related roadmap. The **full stack 
 | **[gpu-assets-tooling-roadmap.md](./gpu-assets-tooling-roadmap.md)** | Resident GPU data, readback for browser object export (sprites / BMP / IFF), glTF interchange, streamed animation from clips. |
 | **[sims-content-pipeline-notes.md](./sims-content-pipeline-notes.md)** | Historical notes on 3DS Max note tracks, the CMX Exporter, Transmogrifier/RugOMatic/ShowNTell, community content sites, and how they inform VitaMoo's browser-based tool and interchange design. |
 | **[gltf-extras-metadata.md](./gltf-extras-metadata.md)** | How VitaMoo uses glTF `extras` for the same purposes as 3DS Max note tracks: skeleton/suit/accessory tagging, bone flags, animation skill metadata, time-keyed events, content catalog data. Round-trip-safe through Blender and conformant tools. |
+| **[guid-collision-analysis-plan.md](./guid-collision-analysis-plan.md)** | GUID collision workflow for object scans: GUID -> object lists, exact groups, near-match matrix, immutable built-in handling, and warning payloads for guided/manual resolution. Includes the Cursor/MOOLLM diagnostics-first pattern (analysis scripts emit context-rich warnings; disposition is a separate tool-driven phase). |
 | **[ui-overlay-encyclopedia.md](./ui-overlay-encyclopedia.md)** | **UI overlay reference:** selection marker, plumb-bob-style lighting, pie-menu center head, feathered shadow, **censorship overlay**, **speech/thought bubbles with text** (MMO-style); formulas, timings, layout, queues; glTF for marker mesh; implementation checklist. |
 | **[OBLITERATOR-TYPESCRIPT.md](./OBLITERATOR-TYPESCRIPT.md)** | **Sims 1 save / game data in TypeScript:** Python survey; **L0–L4** I/O + **§6** layered **YAML/JSON** interchange (exploded/decoded/semantic), **manifest + fidelity profiles** (Transmogrifier-style partial export, derived α/Z/zoom), **BHAV → YAML** round-trip; MOOLLM **[sim-obliterator](https://github.com/SimHacker/moollm/tree/main/designs/sim-obliterator)**; pure TS read path; roster → VitaMoo first. |
+| **[moo-world-model-and-save-alignment.md](./moo-world-model-and-save-alignment.md)** | **Moo vocabulary vs Sims persistence:** district, resident record, household, lot archive, **Person**, **Appearance**; **playing scene**; **§5** scene container — top-level arrays, **`id`** refs, YAML option, per-type **`id→row` caches**, jq-friendly interchange; tool layers; glTF + sidecar. |
 
 **Reading order:** [`webgpu-renderer-status.md`](./webgpu-renderer-status.md) for orientation, then [`webgpu-renderer-design.md`](./webgpu-renderer-design.md) for depth. GPU deform/animation **contract and checklist** live in **design §5.0** when changing that path.
 
@@ -45,6 +47,7 @@ See **[webgpu-renderer-status.md](./webgpu-renderer-status.md)** (gaps, next ste
 
 - **Holodeck §4:** background, walls/roofs, environment draw order—still the main greenfield vertical.
 - **§5 polish:** GPU pass timing in the debug UI, richer validation summaries, automated end-to-end GPU parity tests; bone-level object IDs for sub-mesh picking (design §2.3).
+- **Object GUID collisions:** run GUID -> object grouping and similarity matrix analysis before any re-GUID/disable action (see [`guid-collision-analysis-plan.md`](./guid-collision-analysis-plan.md)).
 
 ---
 

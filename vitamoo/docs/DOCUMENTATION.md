@@ -18,7 +18,7 @@ flowchart TB
     direction LR
     B["MooShowStage, ContentLoader, SpinController"]
     C["picking, audio"]
-    D["Hooks: onPick, onSceneChange, onKeyAction, onOrbitViewChange…"]
+    D["Hooks: onPick, onSceneIdChange, onKeyAction, onOrbitViewChange…"]
   end
   subgraph core["vitamoo (core)"]
     direction LR
@@ -91,7 +91,7 @@ import { createMooShowStage } from 'mooshow';
 
 const stage = createMooShowStage({
   canvas: document.querySelector('canvas'),
-  hooks: { onSceneChange: (name) => { … }, onKeyAction: (action, value) => { … } },
+  hooks: { onSceneIdChange: (sceneId) => { … }, onKeyAction: (action, value) => { … } },
   assetsBaseUrl: '/data/',   // base URL for content index and assets
   // verbose: true,  // optional: log renderer, texture, deformMesh, pick (also ?vitamooVerbose=1 in browser)
 });
@@ -171,7 +171,7 @@ Optional callbacks the app can pass in `StageConfig.hooks`:
 - **`onSelectionChange(actorIndex)`** — Selected actor changed (including after setScene/setCharacterSolo).
 - **`onHighlight(actorIndex | null)`** — Highlight state changed.
 - **`onPlumbBobChange(actorIndex, visible)`** — Plumb bob drawn for actor.
-- **`onSceneChange(sceneName | null)`** — Scene set (name) or cleared (null).
+- **`onSceneIdChange(sceneId | null)`** — Scene set (id) or cleared (null).
 - **`onAnimationTick(time)`** — Every frame, with current anim time.
 - **`onKeyAction(action, value?)`** — Global key: stepSceneNext/Prev, stepActorNext/Prev, stepCharacterNext/Prev, stepAnimationNext/Prev, togglePause, setSpeed.
 - **`onOrbitViewChange(state)`** — Orbit camera changed from canvas input (wheel zoom, background drag rotate/tilt). `state` is `{ rotY, rotX, zoom }` in radians and the stage’s zoom factor. Use this to keep host UI (e.g. range sliders) in sync with the canvas.
@@ -201,12 +201,12 @@ ContentLoader is used internally by the stage; its types are exported so the app
 - **Component:** `src/lib/components/VitaMooSpace.svelte` — one component that owns the canvas, creates the stage, loads the content index, and wires:
   - Scene / Actor / Character / Animation dropdowns to `setScene`, `selectActor`, `setCharacterSolo`, `setAnimation`.
   - Bottom bar: distance presets, Rotate/Tilt/Zoom/Speed sliders, Pause, Help.
-  - Hooks: `onSceneChange`, `onSelectionChange`, `onKeyAction`, and `onOrbitViewChange` so wheel/drag orbit updates match the bottom-bar Rotate/Tilt/Zoom sliders (controlled `value` + `oninput`, not one-way `bind:value` only).
+  - Hooks: `onSceneIdChange`, `onSelectionChange`, `onKeyAction`, and `onOrbitViewChange` so wheel/drag orbit updates match the bottom-bar Rotate/Tilt/Zoom sliders (controlled `value` + `oninput`, not one-way `bind:value` only).
 - **State:** `src/lib/stores/app-state.svelte.ts` — Svelte 5 runes (e.g. current scene index, actor index, character index, animation name, loading message).
 
 ### Data and assets
 
-- Content index and assets are served from `vitamoospace/static/data/` (e.g. `content.json`, CMX, SKN, BMP, CFP). Maintain that directory as your content pack.
+- Content index and assets are served from `vitamoospace/static/data/` (e.g. `content-exchange.json`, optional `content-assets.json`, CMX, SKN, BMP, CFP). Maintain that directory as your content pack.
 - `assetsBaseUrl` is set so the stage loads from `/data/` (or the same path with a base path if using SvelteKit `paths.base`).
 
 ### Build and deploy
@@ -220,7 +220,7 @@ ContentLoader is used internally by the stage; its types are exported so the app
 
 1. App or user triggers “load content” → stage calls `loader.loadIndex(url)` then `loader.loadAllContent(onProgress)`.
 2. User selects scene or character → stage calls `loader.loadScene(i)` or `loader.loadCharacterBody(char)`; both use `_buildBodyFromCharacter` and produce a `Body[]` (one or many).
-3. Stage sets `_bodies`, camera target, and selection; fires `onSceneChange` / `onSelectionChange`.
+3. Stage sets `_bodies`, camera target, and selection; fires `onSceneIdChange` / `onSelectionChange`.
 4. Every frame: animation tick for each body’s `practice`, top physics for selected bodies, momentum decay, spin sound update; then render meshes and plumb bobs.
 5. Input (mouse/key) updates `stage.spin` and/or body `spinOffset`; keyboard can trigger `onKeyAction` for the app to change scene/actor/character/animation.
 
@@ -237,8 +237,8 @@ ContentLoader is used internally by the stage; its types are exported so the app
 
 - Add `mooshow` (and thus `vitamoo`) as dependencies.
 - Create a canvas, `createMooShowStage({ canvas, hooks, assetsBaseUrl })`, then `loadContentIndex(...)`, `setScene(0)` or `setCharacterSolo(0)`, `start()`.
-- Bind your UI to `stage.scenes`, `stage.characters`, `stage.skillNames`, `stage.bodies`, `stage.selectedActor` and call `setScene`, `setCharacterSolo`, `selectActor`, `setAnimation`; use `onSceneChange`, `onSelectionChange`, `onKeyAction` to keep your state in sync.
-- Override `assetsBaseUrl` and put your `content.json` and assets where your app serves them.
+- Bind your UI to `stage.scenes`, `stage.characters`, `stage.skillNames`, `stage.bodies`, `stage.selectedActor` and call `setScene`, `setCharacterSolo`, `selectActor`, `setAnimation`; use `onSceneIdChange`, `onSelectionChange`, `onKeyAction` to keep your state in sync.
+- Override `assetsBaseUrl` and put your `content-exchange.json` (`assetIndexRef` optional) plus assets where your app serves them.
 
 ### Custom content index or assets
 
@@ -296,7 +296,7 @@ Order matters: vitamoospace depends on mooshow, mooshow on vitamoo. For developm
 - **mooshow:** `pnpm --filter mooshow run build` → `mooshow/dist/`.
 - **vitamoospace:** `pnpm --filter vitamoospace run build` → `vitamoospace/build/` (static) or run `vite dev` for dev server.
 
-Demo assets: ensure `vitamoospace/static/data/` contains `content.json` and the CMX/SKN/BMP/CFP files referenced there (maintain your own content pack in that tree).
+Demo assets: ensure `vitamoospace/static/data/` contains `content-exchange.json` (and optional `content-assets.json`) plus the CMX/SKN/BMP/CFP files referenced there (maintain your own content pack in that tree).
 
 ### GitHub Pages (optional)
 

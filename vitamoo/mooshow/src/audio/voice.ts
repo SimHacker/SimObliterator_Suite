@@ -34,7 +34,7 @@ function lerpVowel(angle: number, tiltAmount: number): [number, number, number] 
 export interface VoiceParams {
     basePitch: number;      // fundamental frequency (Hz). Male ~100, female ~180, child ~220+
     pitchRange: number;     // how much pitch rises with spin speed
-    formantScale: number;   // overall formant brightness multiplier (legacy compat)
+    formantScale: number;   // overall formant brightness multiplier
     breathiness: number;    // noise mix (0-1). Higher = airier voice
     vocalTract: number;     // vocal tract length factor (0.7-1.3). <1 = shorter (child/female), >1 = longer (deep male)
 }

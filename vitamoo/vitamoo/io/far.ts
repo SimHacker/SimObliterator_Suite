@@ -2,7 +2,8 @@
 // Magic: "FAR!byAZ", little-endian directory at end. Payload is stored uncompressed when
 // raw size equals compressed size (standard game FARs).
 
-export const FAR_MAGIC = 'FAR!byAZ';
+export const knFARTag = 'FAR!byAZ';
+export const FAR_MAGIC = knFARTag;
 export const FAR_VERSION = 1;
 
 export interface FarEntry {

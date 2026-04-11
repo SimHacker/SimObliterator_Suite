@@ -8,9 +8,9 @@
 |-------|------|
 | **vitamoo/** | Core: parsers, skeleton math, mesh deformation, animation ticks, **`io/`** (FAR archives, Maxis IFF v1/v2.x with version detection, FourCC resource type constants, STR#/CTSS/CST string tables, pluggable resource handler registry). No DOM, no canvas. |
 | **mooshow/** | Graphics/runtime: WebGPU stage (`Renderer.create`), camera, object-ID picking, spin input, hooks for UI (selection, plumb bob, keys). Depends on `vitamoo`. |
-| **vitamoospace/** | SvelteKit app: full-page demo, scene/character/animation menus, one `VitaMooSpace` component that uses `vitamoo` + `mooshow`. |
+| **vitamoospace/** | SvelteKit app: full-page demo, playing-scene / template / skill menus, one `VitaMooSpace` component that uses `vitamoo` + `mooshow`. |
 
-Scenes and characters come from a **content index** (e.g. `content.json`) plus CMX/SKN/BMP/CFP assets. Bodies are an array of characters; the loader fills it from a scene or from one character by index. The app can use a current character index (e.g. -1 for “all” in the UI).
+Scenes and bodies come from the **playing-scene exchange** (`content-exchange.json` with `schemaVersion`, `characterTemplates`, `playingScenes`, optional `assetIndexRef` to a pure asset list such as `content-assets.json`) plus CMX/SKN/BMP/CFP assets. The loader enforces exchange schema validation and maps templates/placements to the runtime index (`characters`, `scenes`, `cast`) without legacy fallback paths. See `docs/moo-world-model-and-save-alignment.md`. Validate shipped demo files with `npm run verify:exchange`, merge invariants with `npm run verify:exchange:merge`, and GUID-collision groundwork with `npm run verify:guid-collision`.
 
 ## Quick start
 

@@ -9,13 +9,31 @@
 | **0** Setup and baseline | Done | mooshow + vitamoospace exist; pnpm filters in use. |
 | **1** Extract runtime state | Done | Stage has bodies, selectedActor, setScene, setCharacterSolo, ContentLoader, animation loop. |
 | **2** Rendering and hooks | Done | Hooks (onPick, onHover, onSelectionChange, onHighlight, onPlumbBobChange, onOrbitViewChange, etc.), picking, SpinController, SoundEngine. |
-| **3** VitaMooSpace.svelte | Done | Single full-page component, scene/actor/character/animation controls, loads `/data/content.json`, api/health placeholder. |
+| **3** VitaMooSpace.svelte | Done | Single full-page component, scene/actor/character/animation controls, loads `/data/content-exchange.json` (optionally via `assetIndexRef`), api/health placeholder. |
 | **4** GitHub Pages | Done | `.github/workflows/pages.yml` builds vitamoo → mooshow → vitamoospace and deploys `vitamoospace/build`. Deploy runs only when `VITAMOOSPACE_PAGES_URL` is set (variable or secret) on that repository. |
 | **5** Cleanup and parity | Done | Legacy standalone `demo/` removed. Verbose logging gated (`Renderer.create` / `StageConfig.verbose` / `?vitamooVerbose=1`). `vitamoospace/.gitignore` ignores `.svelte-kit` and `node_modules`. Optional: parity write-up and monorepo migration notes for contributors who want them. |
 
 Definition of Done: items 1–5 are met for shipping layers (core, mooshow, vitamoospace, Pages, quiet default console).
 
 **Beyond Phase 5 (not refactor backlog):** **Holodeck** (design §4 in [`webgpu-renderer-design.md`](./webgpu-renderer-design.md))—terrain/floor/wall/roof pipeline—is still **not started**. **Design §5** (GPU animation, deformation, world transform, batched compute, validation taps) is **largely implemented** in code; remaining gaps are observability, UX, and automated GPU end-to-end parity—see [`webgpu-renderer-status.md`](./webgpu-renderer-status.md). **Design §5.0** remains the contract reference for CPU/GPU deformation regressions. Further-out: RGB+alpha+z layered sprites for object tooling, save viewing/editing.
+
+### Next app milestone: `Roots` + `Catalog` tabs
+
+The next vitamoospace milestone is a filesystem/object inventory workflow:
+
+1. Add `Roots` tab for root management (multiple installs/saves/object folders), scan controls, and run summaries.
+2. Add `Catalog` tab for querying discovered files/objects/chunks from a normalized inventory.
+3. Model each root with explicit `rootType` plus free-form `rootMetadata` (metadata hidden in UI for now).
+4. Back these tabs with Node-side scan APIs and SQLite storage.
+5. Keep scan robust and non-fatal per file; failed parses become structured issues, not app crashes.
+6. Respect disabled suffix rules during intake: skip any path ending in `-disabled` (for example `foo.iff-disabled`).
+7. Future pass: add remote catalog roots that can point at online JSON/YAML manifests or service APIs, with root metadata fields (for example `siteUrl`, `serviceUrl`, `username`, `password`) and incremental/searchable catalog sync.
+8. Future pass: apply per-root filters before catalog merge so remote roots can stream or chunk metadata and cache progressively instead of pulling everything.
+9. Future pass: add pluggable root drivers (first-party service first) for incremental query/search/filter, metadata fetch, object download, and upload/publish.
+10. Future pass: treat roots as inputs and outputs with explicit privacy/write controls (private backup vs shared collections, remote publish, local export/write).
+11. Future pass: add install-set and save virtualization tooling to switch object sets safely (inactive staging, stop/switch/start orchestration) and manage virtualized save sets.
+
+See the coding-order details in [`OBLITERATOR-TYPESCRIPT.md`](./OBLITERATOR-TYPESCRIPT.md) Phase A1.
 
 ---
 
@@ -32,7 +50,7 @@ This is monorepo-ready without doing the full monorepo move yet.
 ## Current State
 
 - Core library files live in `vitamoo/vitamoo/*.ts`.
-- The browser app is **vitamoospace** (SvelteKit + mooshow + vitamoo `Renderer`). Scene data lives under `vitamoospace/static/data/` (including `content.json`).
+- The browser app is **vitamoospace** (SvelteKit + mooshow + vitamoo `Renderer`). Scene data lives under `vitamoospace/static/data/` (including `content-exchange.json` and optional `content-assets.json`).
 
 ## Target Layout (inside `vitamoo/`)
 
@@ -57,7 +75,7 @@ This is monorepo-ready without doing the full monorepo move yet.
       - **lib/components/** — `VitaMooSpace.svelte`, `SceneMenu.svelte`, `ActorMenu.svelte`
       - **lib/stores/** — `scene-state.svelte.ts`, `app-state.svelte.ts`
       - **lib/config/** — `scenes.schema.ts`
-    - **static/data/** — `content.json`, demo assets
+    - **static/data/** — `content-exchange.json`, optional `content-assets.json`, demo assets
 
 ## Architectural Boundaries
 
@@ -120,7 +138,7 @@ Suggested API shape:
 
 ## Data and Configuration Strategy
 
-- Treat `vitamoospace/static/data/content.json` as the runtime content index (same schema the old viewer used).
+- Treat `vitamoospace/static/data/content-exchange.json` as the runtime content index, with optional `assetIndexRef` to `content-assets.json`.
 - Runtime-consumed assets stay under:
   - `vitamoospace/static/data/`
 - Add optional app-facing scene config:
@@ -184,7 +202,7 @@ Acceptance:
    - actor selector
    - animation selector
    - toggles for autoplay/spin/highlight
-2. Load JSON content from `/data/content.json`.
+2. Load JSON content from `/data/content-exchange.json` (and optional `assetIndexRef` assets file).
 3. Instantiate `mooshow` on mount and destroy on unmount.
 4. Bind UI controls to stage API.
 
@@ -259,7 +277,7 @@ Acceptance:
    - Mitigation: enforce a narrow `mooshow` stage API and hooks contract.
 
 3. Risk: asset path breakage during SvelteKit migration.
-   - Mitigation: keep original filenames and mirror the `content.json` references in `static/data`.
+   - Mitigation: keep original filenames and mirror the `content-exchange.json` and `assetIndexRef` references in `static/data`.
 
 4. Risk: too much rewrite at once.
    - Mitigation: ship vitamoospace first; remove the old tree only after the new path is stable (done).

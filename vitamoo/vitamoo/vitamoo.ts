@@ -138,6 +138,11 @@ export {
     ResourceHandlerRegistry,
     parseStr, parseCst, strStrings, strGet, strGetLang,
     strHandler, ctssHandler, cstHandler,
+    buildGuidObjectMap,
+    appendGuidObjectMap,
+    analyzeGuidBucket,
+    analyzeGuidObjectMap,
+    buildGuidCollisionWarnings,
 } from './io/index.js';
 export type {
     IffChunkInfo,
@@ -145,6 +150,15 @@ export type {
     FarArchive, FarEntry,
     ResourceHandler, ResourceParseContext,
     StrItem, StrLanguageSet, StrResource,
+    GuidValue,
+    ObjectSourceKind,
+    GuidCollisionObject,
+    GuidObjectMap,
+    GuidExactMatchGroup,
+    GuidSimilarityMatrix,
+    GuidCollisionAnalysis,
+    GuidCollisionWarning,
+    GuidCollisionOptions,
 } from './io/index.js';
 export type {
     DisplayListEntry,
@@ -157,3 +171,18 @@ export type {
     DisplayListLayer,
     PickingOptions,
 } from './display-list.js';
+
+export type {
+    PlayingSceneMetadata,
+    GltfAttachmentRef,
+    CharacterTemplate,
+    PersonPlacement,
+    PlayingSceneDefinition,
+    PlayingSceneExchange,
+} from './playing-scene/index.js';
+export {
+    assertPlayingSceneExchange,
+    isPlayingSceneExchange,
+    characterTemplateById,
+    playingSceneById,
+} from './playing-scene/index.js';

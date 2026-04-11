@@ -93,3 +93,22 @@ export {
     cstHandler,
 } from './str-handler.js';
 export type { StrItem, StrLanguageSet, StrResource } from './str-handler.js';
+
+export {
+    buildGuidObjectMap,
+    appendGuidObjectMap,
+    analyzeGuidBucket,
+    analyzeGuidObjectMap,
+    buildGuidCollisionWarnings,
+} from './guid-collision.js';
+export type {
+    GuidValue,
+    ObjectSourceKind,
+    GuidCollisionObject,
+    GuidObjectMap,
+    GuidExactMatchGroup,
+    GuidSimilarityMatrix,
+    GuidCollisionAnalysis,
+    GuidCollisionWarning,
+    GuidCollisionOptions,
+} from './guid-collision.js';
